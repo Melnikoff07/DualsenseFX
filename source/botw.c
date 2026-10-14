@@ -296,14 +296,13 @@ bool BotwComputeLightbar(BotwState *state, u8 *r, u8 *g, u8 *b) {
         return false;
     }
 
-    // While a save loads hearts read 1 for several seconds before the inventory appears:
-    // only trust a low value once the game is loaded (something equipped) or it has been stable for 3 s
+    // On the title screen and while a save loads hearts read 1: only trust the value once the
+    // game is loaded (something is equipped) and not right after a death or reload
     bool loaded = false;
     for (int t = 0; t < BotwSlot_Count; ++t) {
         loaded |= state->equipped[t].present;
     }
-    bool stable = armTicksToNs(armGetSystemTick() - state->hearts_changed_tick) >= 3000000000ULL;
-    if ((!loaded && !stable) || armGetSystemTick() < state->settle_until_tick) {
+    if (!loaded || armGetSystemTick() < state->settle_until_tick) {
         return false;
     }
 
