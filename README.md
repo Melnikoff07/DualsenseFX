@@ -1,70 +1,79 @@
 # adaptive_triggers
 
-Адаптивные триггеры и световая полоса DualSense, которые реагируют на происходящее в
-The Legend of Zelda: Breath of the Wild **1.6.0** (Build ID `8E9978D50BDD20B4`) на Switch с Atmosphère.
+DualSense adaptive triggers and lightbar effects that react to what happens in
+The Legend of Zelda: Breath of the Wild **1.6.0** (build ID `8E9978D50BDD20B4`) on a Switch running Atmosphère.
 
-Состоит из двух частей:
+Two parts:
 
-| Часть | Где | Что делает |
+| Part | Location on the SD card | What it does |
 |---|---|---|
-| Форк MissionControl (ветка `dualsense-triggers`) | `atmosphere/contents/010000000000bd00` | драйвер DualSense; команды в сервисе `mc`: 6/7 эффекты триггеров, 8 положение триггеров, 9/10 цвет световой полосы. Всё сбрасывается само, когда клиент отключается |
-| sysmodule `adaptive_triggers` | `atmosphere/contents/42000000000d5e00` | видит запуск BotW, через `dmnt:cht` читает состояние игры и отправляет эффекты в MissionControl |
+| MissionControl fork (branch `dualsense-triggers`) | `atmosphere/contents/010000000000bd00` | DualSense driver; extra `mc` service commands: 6/7 trigger effects, 8 analog trigger state, 9/10 lightbar colour, 11 HD haptics status. Overrides are cleared automatically when the client session closes |
+| `adaptive_triggers` sysmodule | `atmosphere/contents/42000000000d5e00` | detects BotW, reads game state through `dmnt:cht` and sends effects to MissionControl |
 
-## Эффекты
+## Effects
 
-| Где | Событие | Ощущение |
+| Where | Event | Feel |
 |---|---|---|
-| R2 | лук натянут | тугое натяжение; до наложения стрелы свободен; 1,5 с после выстрела остаётся лёгким для быстрой стрельбы |
-| R2 | лук на последних 3 выстрелах / удар мечом на последних 3 ударах | слабое жужжание / импульс |
-| L2 | есть щит и одноручное оружие (или без оружия) | ровная упругость |
-| L2 | удар по поднятому щиту | короткая слабая вибрация |
-| оба | Защита Дарука приняла удар | вибрация + оранжевая вспышка полосы |
-| оба | сёрфинг на щите | постоянная мелкая вибрация; толчок, когда щит изнашивается |
-| полоса | ≤ 1 сердца | красное «сердцебиение» |
-| — | меню паузы, смерть, загрузка сохранения, экран заставки | всё выключено |
+| R2 | bow drawn | tight tension; free until an arrow is nocked; stays light for 1.5 s after a shot for rapid fire |
+| R2 | bow with 3 shots left / sword hit with 3 hits left | weak buzz / pulse |
+| L2 | shield equipped with a one-handed weapon (or none) | even resistance |
+| L2 | hit on a raised shield | short, light vibration |
+| both | Daruk's Protection blocks a hit | vibration + orange lightbar flash |
+| both | shield surfing | continuous light rumble, stronger pulse when the shield wears down |
+| lightbar | 1 heart or less | red heartbeat |
+| — | pause menu, death, save loading, title screen | everything off |
 
-Настройки: `config/adaptive_triggers/config.ini` на карте (с комментариями). Лог: `config/adaptive_triggers/log.txt`
-(предыдущий запуск: `log.old.txt`).
+Settings: `config/adaptive_triggers/config.ini` on the SD card (commented). Log: `config/adaptive_triggers/log.txt`
+(previous boot: `log.old.txt`).
 
-## Что прочитано из памяти игры (1.6.0, проверено на консоли)
+## Game memory used (1.6.0, verified on console)
 
-| Что | Где |
+| What | Where |
 |---|---|
-| менеджер инвентаря `PauseMenuDataMgr` | `[main+2CA6D48]` |
-| предметы инвентаря | `mgr+0x90`, 420 слотов по `0x298`; `+0x18` тип, `+0x20` значение (прочность ×100), `+0x24` экипирован, `+0x3C` имя (раскладка декомпиляции 1.5.0 + 8: в 1.6.0 есть vtable) |
-| меню паузы открыто | `mgr+0x447D8` (`mEquippedWeapons`) ненулевой |
-| актёр Линка | `[[main+2CA1A78]+0x80]` (`PlayerInfo::mPlayerActor`) |
-| сердца | актёр `+0x848` (четверти сердца) |
-| лук | актёр `+0x1F88`: 0 нет, 1 накладывает стрелу, 2 натянут, 3 выстрел |
-| флаги действий | актёр `+0xC40`: `0x18` стойка ZL, `0x40000000` прицел лука, `0xC000` Защита Дарука приняла удар, `0x2` прыжок/полёт |
-| сёрфинг | своего флага не найдено: начало — стойка ZL сбрасывается сразу в 0 без анимации опускания щита; также износ щита без стойки |
+| inventory manager `PauseMenuDataMgr` | `[main+2CA6D48]` |
+| inventory items | `mgr+0x90`, 420 slots of `0x298`; `+0x18` type, `+0x20` value (durability ×100), `+0x24` equipped, `+0x3C` name (decomp 1.5.0 layout + 8: 1.6.0 has a vtable) |
+| pause menu open | `mgr+0x447D8` (`mEquippedWeapons`) non-null |
+| player actor | `[[main+2CA1A78]+0x80]` (`PlayerInfo::mPlayerActor`) |
+| hearts | actor `+0x848` (quarter hearts) |
+| bow | actor `+0x1F88`: 0 none, 1 nocking, 2 drawn, 3 shot |
+| action flags | actor `+0xC40`: `0x18` ZL stance, `0x40000000` bow aim, `0xC000` Daruk's Protection blocked a hit, `0x2` jump/fall |
+| shield surfing | no flag found: starts when the ZL stance drops straight to 0 without the shield-lowering animation; also shield wear without the stance |
 
-Источники: декомпиляция [zeldaret/botw](https://github.com/zeldaret/botw) (v1.5.0), коды читов
-switch-cheats-db для этого Build ID, поиск по корреляции и наблюдения в логах самого модуля.
+Sources: the [zeldaret/botw](https://github.com/zeldaret/botw) decompilation (v1.5.0), switch-cheats-db codes for this
+build ID, the module's correlation search and watch logs.
 
-## Сборка
+## Building
 
-Тулчейн в Lima VM `mcbuild` с Docker-образом `mc-devkit:libnx-feebd02` (devkitPro + libnx из сабмодуля MissionControl).
+Toolchain in the Lima VM `mcbuild` with the Docker image `mc-devkit:libnx-feebd02` (devkitPro + libnx from the
+MissionControl submodule).
 
 ```
 tools/dk 'cd MissionControl && make dist -j8'
 tools/dk 'cd adaptive_triggers && make -j8 dist'
 ```
 
-## Установка и откат
+## Install and roll back
 
-Карта в Mac (`/Volumes/NS_SAMSUNG`):
+With the SD card mounted on a Mac (`/Volumes/NS_SAMSUNG`):
 
 ```
 tools/deploy.sh             # MissionControl + adaptive_triggers + config.ini
-tools/deploy.sh --rollback  # оригинальный MissionControl 0.16.0, adaptive_triggers удаляется
+tools/deploy.sh --rollback  # original MissionControl 0.16.0, adaptive_triggers removed
 ```
 
-Отключить только модуль: удалить `atmosphere/contents/42000000000d5e00/flags/boot2.flag`.
-Резервная копия оригинального MissionControl: `backups/MissionControl-0.16.0-original-20261014`.
+To disable only the module, delete `atmosphere/contents/42000000000d5e00/flags/boot2.flag`.
 
-## Ограничения
+## Limitations
 
-- Только BotW 1.6.0. Для другой сборки модуль ничего не делает (пишет в лог «unknown build»).
-- Пока идёт BotW, модуль занимает одну из двух сессий `dmnt:cht`: Breeze или EdiZon работают, но не оба сразу.
-- Подключение к игре через 30 с после запуска: раньше конфликтует с внедрением SaltyNX.
+- BotW 1.6.0 only. Other builds are detected and left alone ("unknown build" in the log).
+- While BotW runs the module holds one of the two `dmnt:cht` sessions: Breeze or EdiZon work, but not both at once.
+- Attaches 30 s after launch: attaching earlier conflicts with SaltyNX injection.
+
+## Credits
+
+- [zeldaret/botw](https://github.com/zeldaret/botw) decompilation.
+- Trigger effect encodings: Nielk1's TriggerEffectGenerator (used by DSX).
+- DualSense Bluetooth haptics report format: [SAxense](https://github.com/egormanga/SAxense) by egormanga
+  ([apps.sdore.me/SAxense](https://apps.sdore.me/SAxense)), cross-checked with
+  [awalol/dualsense-bt-haptics](https://github.com/awalol/dualsense-bt-haptics).
+- [MissionControl](https://github.com/ndeadly/MissionControl) by ndeadly.

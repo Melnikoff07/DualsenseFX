@@ -9,6 +9,7 @@ enum {
     McCmd_GetAnalogTriggers     = 8,
     McCmd_SetLightbarColour     = 9,
     McCmd_ClearLightbarColour   = 10,
+    McCmd_GetHapticsStatus      = 11,
 };
 
 static Service g_mc;
@@ -39,6 +40,10 @@ Result mcClearTriggerEffects(void) {
 
 Result mcGetAnalogTriggers(McAnalogTriggers *out) {
     return serviceDispatchOut(&g_mc, McCmd_GetAnalogTriggers, *out);
+}
+
+Result mcGetHapticsStatus(McHapticsStatus *out) {
+    return serviceDispatchOut(&g_mc, McCmd_GetHapticsStatus, *out);
 }
 
 Result mcSetLightbarColour(u8 r, u8 g, u8 b) {

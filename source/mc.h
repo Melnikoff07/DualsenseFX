@@ -28,6 +28,17 @@ typedef struct {
 } McAnalogTriggers;
 
 Result mcGetAnalogTriggers(McAnalogTriggers *out);
+
+typedef struct {
+    u32 enabled;
+    u32 thread_running;
+    u32 ticks;
+    u32 reports_sent;
+    u32 reports_failed;
+    u32 last_error;
+} McHapticsStatus;
+
+Result mcGetHapticsStatus(McHapticsStatus *out);
 Result mcSetLightbarColour(u8 r, u8 g, u8 b);
 Result mcClearLightbarColour(void);
 

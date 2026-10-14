@@ -554,6 +554,32 @@ static void Update(GameSession *s) {
     }
 }
 
+// MissionControl HD haptics diagnostics, logged when they change (opens a short mc session when no game runs)
+static void LogHapticsStatus(bool mc_open) {
+    static McHapticsStatus last;
+    static bool have_last;
+
+    if (!mc_open && R_FAILED(mcInitialize())) {
+        return;
+    }
+    McHapticsStatus st;
+    Result rc = mcGetHapticsStatus(&st);
+    if (!mc_open) {
+        mcExit();
+    }
+    if (R_FAILED(rc)) {
+        return;
+    }
+
+    if (!have_last || st.enabled != last.enabled || st.thread_running != last.thread_running ||
+        st.reports_sent != last.reports_sent || st.reports_failed != last.reports_failed) {
+        LogLine("haptics: enabled %u, thread %u, ticks %u, sent %u, failed %u, last error 0x%X",
+                st.enabled, st.thread_running, st.ticks, st.reports_sent, st.reports_failed, st.last_error);
+        last = st;
+        have_last = true;
+    }
+}
+
 int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
@@ -566,8 +592,16 @@ int main(int argc, char **argv) {
     LoadConfig();
 
     GameSession session = {0};
+    u64 next_haptics_log = armGetSystemTick() + armNsToTicks(20000000000ULL);
     while (true) {
         Update(&session);
+
+        if (armGetSystemTick() >= next_haptics_log) {
+            next_haptics_log = armGetSystemTick() + armNsToTicks(10000000000ULL);
+            if (session.state == SessionState_Idle || session.mc_open) {
+                LogHapticsStatus(session.mc_open);
+            }
+        }
         svcSleepThread(session.state == SessionState_Active ? ACTIVE_POLL_INTERVAL_NS : POLL_INTERVAL_NS);
     }
 
