@@ -18,7 +18,9 @@
 // Action flags at player actor +C40 (verified on console):
 //   0x18 while ZL is held (guard / lock-on stance, also with two-handed weapons), 0x40000000 bow aiming,
 //   0xC000 for ~0.13 s when Daruk's Protection blocks a hit.
-//   0x2 for 0.5-4.5 s stretches while the player was shield surfing: HYPOTHESIS, could also be airborne.
+//   0x2 for 0.2-4.5 s stretches: NOT shield surfing (stays off while surfing), probably jumping / airborne.
+// Shield surfing has no known flag yet, but it wears the shield down every few seconds while
+// there is no ZL stance, whereas a blocked hit always happens in the ZL stance.
 #include <stdio.h>
 #include <string.h>
 #include "botw.h"
@@ -45,7 +47,8 @@ void LogLine(const char *fmt, ...);
 #define PLAYER_BOW_STATE       0x1F88
 #define PLAYER_ACTION_FLAGS    0xC40
 #define ACTION_DARUK_BLOCK     0xC000
-#define ACTION_SURFING         0x2
+#define ACTION_ZL_STANCE       0x18
+#define ACTION_AIRBORNE        0x2   // probably
 
 #define SCAN_INTERVAL_NS       (500 * 1000000ULL)
 #define SETTLE_NS              (2000 * 1000000ULL)  // after death / reload
@@ -61,7 +64,7 @@ BotwSettings g_botw_settings = {
     .bow_release_strength = 0,
     .bow_drawn_strength = 8,
     .daruk_strength = 5,
-    .surf_strength = 2,
+    .surf_strength = 3,
 };
 
 static const u8 SupportedBuildId[8] = { 0x8E, 0x99, 0x78, 0xD5, 0x0B, 0xDD, 0x20, 0xB4 };
@@ -206,7 +209,14 @@ static void TrackValues(BotwState *state) {
             Settle(state, "values reset, save loading");
         } else if (value < e->value && e->value - value <= 1000) {
             // Durability went down: the item was used
-            if (t == BotwSlot_Shield && g_botw_settings.shield_hit_strength > 0) {
+            if (t == BotwSlot_Shield && !(state->action_flags & ACTION_ZL_STANCE)) {
+                // Shield worn down without guarding: shield surfing. Vibration, the finger is usually just resting on the trigger
+                LogLine("botw: shield wear while surfing");
+                if (g_botw_settings.surf_strength > 0) {
+                    Pulse(state, 0, TriggerEffectVibration(0, g_botw_settings.surf_strength, 30), 250 * 1000000ULL);
+                    Pulse(state, 1, TriggerEffectVibration(0, g_botw_settings.surf_strength, 30), 250 * 1000000ULL);
+                }
+            } else if (t == BotwSlot_Shield && g_botw_settings.shield_hit_strength > 0) {
                 // Block impact: the trigger pushes back for a moment, or buzzes
                 u8 strength = g_botw_settings.shield_hit_strength;
                 TriggerEffect impact;
@@ -265,8 +275,8 @@ static void UpdateActionFlags(BotwState *state) {
         }
         state->flash_until_tick = armGetSystemTick() + armNsToTicks(400 * 1000000ULL);
     }
-    if ((flags & ACTION_SURFING) != (state->action_flags & ACTION_SURFING)) {
-        LogLine("botw: surf flag %s", (flags & ACTION_SURFING) ? "on" : "off");
+    if ((flags & ACTION_AIRBORNE) != (state->action_flags & ACTION_AIRBORNE)) {
+        LogLine("botw: airborne(?) flag %s", (flags & ACTION_AIRBORNE) ? "on" : "off");
     }
     state->action_flags = flags;
 }
@@ -346,11 +356,6 @@ bool BotwComputeEffects(BotwState *state, TriggerEffects *out) {
     bool one_handed = !sword->present || strncmp(sword->name, "Weapon_Sword_", 13) == 0;
     if (shield->present && shield->value > 0 && one_handed) {
         out->left = IsLow(shield) ? TriggerEffectVibration(2, 3, 20) : TriggerEffectFeedback(ShieldGuard);
-    }
-
-    // Shield surfing: light low rumble on L2, like the board sliding
-    if ((state->action_flags & ACTION_SURFING) && shield->present && g_botw_settings.surf_strength > 0) {
-        out->left = TriggerEffectVibration(0, g_botw_settings.surf_strength, 25);
     }
 
     // Short event effects override the profile
