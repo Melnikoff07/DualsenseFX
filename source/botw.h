@@ -38,6 +38,7 @@ typedef struct {
 typedef struct {
     u8 shield_hit_strength; // 0-8, 0 disables the block impact pulse
     u32 shield_hit_ms;
+    u32 low_health_quarters; // heartbeat on the lightbar at or below this many quarter hearts, 0 disables
 } BotwSettings;
 
 extern BotwSettings g_botw_settings;
@@ -47,3 +48,9 @@ void BotwUpdate(BotwState *state, const DmntCheatProcessMetadata *meta);
 
 // Trigger effects for the current game state. Returns false if the build is not supported.
 bool BotwComputeEffects(BotwState *state, TriggerEffects *out);
+
+// Lightbar colour for the current game state. Returns false when the normal player colour should show.
+bool BotwComputeLightbar(BotwState *state, u8 *r, u8 *g, u8 *b);
+
+// Player actor (PlayerInfo::mPlayerActor), 0 if not available
+u64 BotwGetPlayerActor(const DmntCheatProcessMetadata *meta);

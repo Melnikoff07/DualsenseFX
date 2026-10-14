@@ -6,6 +6,9 @@ enum {
     McCmd_GetBuildVersionString = 1,
     McCmd_SetTriggerEffects     = 6,
     McCmd_ClearTriggerEffects   = 7,
+    McCmd_GetAnalogTriggers     = 8,
+    McCmd_SetLightbarColour     = 9,
+    McCmd_ClearLightbarColour   = 10,
 };
 
 static Service g_mc;
@@ -32,6 +35,19 @@ Result mcSetTriggerEffects(const TriggerEffects *effects) {
 
 Result mcClearTriggerEffects(void) {
     return serviceDispatch(&g_mc, McCmd_ClearTriggerEffects);
+}
+
+Result mcGetAnalogTriggers(McAnalogTriggers *out) {
+    return serviceDispatchOut(&g_mc, McCmd_GetAnalogTriggers, *out);
+}
+
+Result mcSetLightbarColour(u8 r, u8 g, u8 b) {
+    const struct { u8 r, g, b; } in = { r, g, b };
+    return serviceDispatchIn(&g_mc, McCmd_SetLightbarColour, in);
+}
+
+Result mcClearLightbarColour(void) {
+    return serviceDispatch(&g_mc, McCmd_ClearLightbarColour);
 }
 
 TriggerEffect TriggerEffectSimpleFeedback(u8 start, u8 force) {

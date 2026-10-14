@@ -13,6 +13,7 @@
 #include "dmntcht.h"
 #include "mc.h"
 #include "botw.h"
+#include "search.h"
 
 #define BOTW_PROGRAM_ID 0x01007EF00011E000ULL
 
@@ -34,7 +35,7 @@ static u32 g_attach_delay_s = 30;
 u32 __nx_applet_type     = AppletType_None;
 u32 __nx_fs_num_sessions = 1;
 
-#define INNER_HEAP_SIZE 0x20000
+#define INNER_HEAP_SIZE 0x30000 // search mode allocates ~90 KB for a 16 KB region
 
 void __libnx_initheap(void) {
     static u8 inner_heap[INNER_HEAP_SIZE];
@@ -273,14 +274,25 @@ static void LoadConfig(void) {
             g_botw_settings.shield_hit_strength = value;
         } else if (sscanf(p, "shield_hit_ms = %u", &value) == 1 && value <= 2000) {
             g_botw_settings.shield_hit_ms = value;
+        } else if (sscanf(p, "low_health_quarters = %u", &value) == 1 && value <= 120) {
+            g_botw_settings.low_health_quarters = value;
+        } else if (sscanf(p, "search = %u", &value) == 1) {
+            g_search_settings.enabled = value != 0;
+        } else if (sscanf(p, "search_offset = %x", &value) == 1 && value < 0x100000) {
+            g_search_settings.offset = value & ~3u;
+        } else if (sscanf(p, "search_size = %x", &value) == 1 && value >= 0x100 && value <= 0x4000) {
+            g_search_settings.size = value & ~3u;
         } else if (strncmp(p, "watch=", 6) == 0) {
             ParseWatch(p + 6);
         }
     }
     fclose(f);
 
-    LogLine("config: attach_delay_s=%u, shield_hit_strength=%u, shield_hit_ms=%u, %u watches",
-            g_attach_delay_s, g_botw_settings.shield_hit_strength, g_botw_settings.shield_hit_ms, g_num_watches);
+    LogLine("config: attach_delay_s=%u, shield_hit_strength=%u, shield_hit_ms=%u, low_health_quarters=%u, %u watches",
+            g_attach_delay_s, g_botw_settings.shield_hit_strength, g_botw_settings.shield_hit_ms, g_botw_settings.low_health_quarters, g_num_watches);
+    if (g_search_settings.enabled) {
+        LogLine("config: search on, region +%X size %X", g_search_settings.offset, g_search_settings.size);
+    }
     for (u32 i = 0; i < g_num_watches; ++i) {
         const Watch *w = &g_watches[i];
         char chain[128] = {0};
@@ -317,6 +329,9 @@ typedef struct {
     BotwState botw;
     TriggerEffects sent;
     bool sent_valid;
+    bool lightbar_set;
+    u8 lightbar[3];
+    bool search_started;
 } GameSession;
 
 static bool GetCurrentApplication(u64 *out_pid, u64 *out_program_id) {
@@ -361,6 +376,7 @@ static void CheckMemoryRead(const DmntCheatProcessMetadata *meta) {
 }
 
 static void CloseSession(GameSession *s) {
+    SearchStop();
     if (s->mc_open) {
         mcExit();
         s->mc_open = false;
@@ -465,6 +481,32 @@ static void Update(GameSession *s) {
             } else {
                 LogLine("SetTriggerEffects failed: 0x%X", rc);
             }
+        }
+
+        // Lightbar: heartbeat at low health, player colour otherwise
+        u8 rgb[3];
+        if (s->mc_open) {
+            bool want = BotwComputeLightbar(&s->botw, &rgb[0], &rgb[1], &rgb[2]);
+            if (want && (!s->lightbar_set || memcmp(rgb, s->lightbar, 3) != 0)) {
+                if (R_SUCCEEDED(mcSetLightbarColour(rgb[0], rgb[1], rgb[2]))) {
+                    if (!s->lightbar_set) {
+                        LogLine("lightbar: low health heartbeat on");
+                    }
+                    memcpy(s->lightbar, rgb, 3);
+                    s->lightbar_set = true;
+                }
+            } else if (!want && s->lightbar_set) {
+                mcClearLightbarColour();
+                s->lightbar_set = false;
+                LogLine("lightbar: back to player colour");
+            }
+        }
+
+        if (s->mc_open) {
+            if (!s->search_started) {
+                s->search_started = SearchStart(&s->meta);
+            }
+            SearchUpdate(&s->meta);
         }
     }
 

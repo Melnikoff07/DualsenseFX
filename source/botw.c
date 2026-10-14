@@ -10,7 +10,8 @@
 //    the 1.5.0 decomp layout doesn't have. Values: durability x100 (-100 per hit), arrow count.
 //  - mEquippedWeapons[] non-null means the pause menu is open.
 //
-// Player: hearts at [[main+2CA1A78]+80]+848 (quarter hearts), from cheat codes, verified live.
+// Player: main+2CA1A78 is the PlayerInfo instance, +80 is PlayerInfo::mPlayerActor (decomp actPlayerInfo.h),
+// hearts at player actor +848 (quarter hearts). From cheat codes, verified live.
 #include <stdio.h>
 #include <string.h>
 #include "botw.h"
@@ -44,6 +45,7 @@ void LogLine(const char *fmt, ...);
 BotwSettings g_botw_settings = {
     .shield_hit_strength = 4,
     .shield_hit_ms = 200,
+    .low_health_quarters = 4,
 };
 
 static const u8 SupportedBuildId[8] = { 0x8E, 0x99, 0x78, 0xD5, 0x0B, 0xDD, 0x20, 0xB4 };
@@ -271,6 +273,30 @@ bool BotwComputeEffects(BotwState *state, TriggerEffects *out) {
         }
     }
 
+    return true;
+}
+
+u64 BotwGetPlayerActor(const DmntCheatProcessMetadata *meta) {
+    u64 ptr = 0;
+    if (R_FAILED(dmntchtReadCheatProcessMemory(meta->main_nso_extents.base + PLAYER_INFO_OFFSET, &ptr, sizeof(ptr))) || ptr == 0 ||
+        R_FAILED(dmntchtReadCheatProcessMemory(ptr + PLAYER_HEARTS_CHAIN1, &ptr, sizeof(ptr)))) {
+        return 0;
+    }
+    return ptr;
+}
+
+// Heartbeat: two red flashes per second ("lub-dub") while health is low
+bool BotwComputeLightbar(BotwState *state, u8 *r, u8 *g, u8 *b) {
+    if (!state->supported || state->hearts <= 0 || g_botw_settings.low_health_quarters == 0 ||
+        (u32)state->hearts > g_botw_settings.low_health_quarters) {
+        return false;
+    }
+
+    u64 ms = armTicksToNs(armGetSystemTick()) / 1000000ULL % 1000;
+    bool flash = ms < 120 || (ms >= 250 && ms < 370);
+    *r = flash ? 0x80 : 0x0C;
+    *g = 0;
+    *b = 0;
     return true;
 }
 
