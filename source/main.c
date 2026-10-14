@@ -17,9 +17,14 @@
 #define LOG_DIR      "sdmc:/config/adaptive_triggers"
 #define LOG_PATH     LOG_DIR "/log.txt"
 #define LOG_OLD_PATH LOG_DIR "/log.old.txt"
+#define CONFIG_PATH  LOG_DIR "/config.ini"
 
 #define POLL_INTERVAL_NS     (250 * 1000000ULL)
 #define ATTACH_TIMEOUT_TICKS 120 // 30 s worth of polls
+
+// Seconds to wait after the game starts before attaching. Other tools (SaltyNX) inject
+// into the game right after launch, attaching dmnt during that seems to crash the game.
+static u32 g_attach_delay_s = 30;
 
 // ---- sysmodule runtime setup ----
 
@@ -99,6 +104,28 @@ static void StartLog(void) {
     LogLine("adaptive_triggers started");
 }
 
+// ---- config ----
+
+// config.ini, one "key=value" per line, ';' starts a comment
+static void LoadConfig(void) {
+    FILE *f = fopen(CONFIG_PATH, "r");
+    if (f == NULL) {
+        LogLine("no config.ini, attach_delay_s=%u", g_attach_delay_s);
+        return;
+    }
+
+    char line[128];
+    while (fgets(line, sizeof(line), f)) {
+        unsigned value;
+        if (sscanf(line, " attach_delay_s = %u", &value) == 1 && value <= 600) {
+            g_attach_delay_s = value;
+        }
+    }
+    fclose(f);
+
+    LogLine("config: attach_delay_s=%u", g_attach_delay_s);
+}
+
 // ---- game session ----
 
 typedef enum {
@@ -111,6 +138,7 @@ typedef enum {
 typedef struct {
     SessionState state;
     u64 pid;
+    u64 start_tick;
     u32 attach_tries;
     Result last_attach_rc;
     bool dmnt_open;
@@ -247,10 +275,15 @@ static void Update(GameSession *s) {
         LogLine("BotW started, pid %lu", pid);
         s->state = SessionState_Attaching;
         s->pid = pid;
+        s->start_tick = armGetSystemTick();
+        LogLine("waiting %u s before attaching", g_attach_delay_s);
     }
 
     if (s->state == SessionState_Attaching) {
-        TryAttach(s);
+        u64 running_ns = armTicksToNs(armGetSystemTick() - s->start_tick);
+        if (running_ns >= g_attach_delay_s * 1000000000ULL) {
+            TryAttach(s);
+        }
     }
 }
 
@@ -263,6 +296,7 @@ int main(int argc, char **argv) {
     }
 
     StartLog();
+    LoadConfig();
 
     GameSession session = {0};
     while (true) {
