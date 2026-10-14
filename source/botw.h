@@ -49,6 +49,7 @@ typedef struct {
     u32 low_health_quarters; // heartbeat on the lightbar at or below this many quarter hearts, 0 disables
     u8 bow_release_strength; // 0-8, pulse on R2 when an arrow is shot, 0 disables (not felt: the finger is already off the trigger)
     u8 bow_drawn_strength;   // 1-8, R2 resistance once the bow is drawn (bow state 2)
+    u8 surf_strength;        // 0-8, L2 vibration while shield surfing (hypothesis: player +C40 bit 0x2), 0 disables
     u8 daruk_strength;       // 0-8, vibration on both triggers when Daruk's Protection blocks a hit, 0 disables (lightbar flash stays)
 } BotwSettings;
 
