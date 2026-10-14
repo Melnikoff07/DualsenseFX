@@ -20,5 +20,9 @@ Result mcGetBuildVersionString(char *out, size_t size);
 Result mcSetTriggerEffects(const TriggerEffects *effects);
 Result mcClearTriggerEffects(void);
 
-// Effect builders, same encodings as dualsense_controller.cpp
+// Effect builders, same encodings as dualsense_controller.cpp (Nielk1's TriggerEffectGenerator)
+TriggerEffect TriggerEffectOff(void);
 TriggerEffect TriggerEffectSimpleFeedback(u8 start, u8 force);
+TriggerEffect TriggerEffectFeedback(const u8 strengths[10]);
+TriggerEffect TriggerEffectWeapon(u8 start, u8 end, u8 strength);
+TriggerEffect TriggerEffectVibration(u8 start, u8 amplitude, u8 frequency);

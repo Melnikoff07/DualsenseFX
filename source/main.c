@@ -310,6 +310,8 @@ typedef struct {
     bool mc_open;
     DmntCheatProcessMetadata meta;
     BotwState botw;
+    TriggerEffects sent;
+    bool sent_valid;
 } GameSession;
 
 static bool GetCurrentApplication(u64 *out_pid, u64 *out_program_id) {
@@ -400,13 +402,6 @@ static void TryAttach(GameSession *s) {
         mcGetBuildVersionString(version, sizeof(version));
         LogLine("mc build %s", version);
 
-        // Skeleton: light constant resistance on both triggers while the game runs
-        TriggerEffects effects = {
-            .right = TriggerEffectSimpleFeedback(0x30, 0x80),
-            .left  = TriggerEffectSimpleFeedback(0x30, 0x80),
-        };
-        rc = mcSetTriggerEffects(&effects);
-        LogLine("SetTriggerEffects: 0x%X", rc);
     } else {
         LogLine("mc service unavailable: 0x%X", rc);
     }
@@ -452,6 +447,20 @@ static void Update(GameSession *s) {
     if (s->state == SessionState_Active) {
         UpdateWatches(&s->meta);
         BotwUpdate(&s->botw, &s->meta);
+
+        // Send effects only when they change, the controller keeps the last ones
+        TriggerEffects effects;
+        if (s->mc_open && BotwComputeEffects(&s->botw, &effects) &&
+            (!s->sent_valid || memcmp(&effects, &s->sent, sizeof(effects)) != 0)) {
+            Result rc = mcSetTriggerEffects(&effects);
+            if (R_SUCCEEDED(rc)) {
+                LogLine("effects R2 mode %02X, L2 mode %02X", effects.right.mode, effects.left.mode);
+                s->sent = effects;
+                s->sent_valid = true;
+            } else {
+                LogLine("SetTriggerEffects failed: 0x%X", rc);
+            }
+        }
     }
 
     if (s->state == SessionState_Attaching) {

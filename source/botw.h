@@ -2,6 +2,7 @@
 #pragma once
 #include <switch.h>
 #include "dmntcht.h"
+#include "mc.h"
 
 typedef enum {
     BotwSlot_Sword  = 0,
@@ -24,7 +25,17 @@ typedef struct {
     u64 next_scan_tick;
     BotwEquippedItem equipped[BotwSlot_Count];
     bool dumped[BotwSlot_Count];
+
+    s32 hearts;             // quarter hearts, -1 if unreadable
+    bool menu_open;         // pause menu open (mEquippedWeapons is only filled then)
+    u64 settle_until_tick;  // effects stay off until then (death, save reload)
+    u64 pulse_until_tick[2];// short event effects: [0] right trigger, [1] left trigger
+    TriggerEffect pulse_effect[2];
+    bool effects_off_logged;
 } BotwState;
 
 void BotwInit(BotwState *state, const DmntCheatProcessMetadata *meta);
 void BotwUpdate(BotwState *state, const DmntCheatProcessMetadata *meta);
+
+// Trigger effects for the current game state. Returns false if the build is not supported.
+bool BotwComputeEffects(BotwState *state, TriggerEffects *out);
