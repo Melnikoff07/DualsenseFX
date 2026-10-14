@@ -47,10 +47,12 @@ void LogLine(const char *fmt, ...);
 #define SCAN_CHUNK_ITEMS       12
 
 BotwSettings g_botw_settings = {
-    .shield_hit_strength = 4,
+    .shield_hit_strength = 6,
+    .shield_hit_style = 1,
     .shield_hit_ms = 200,
     .low_health_quarters = 4,
-    .bow_release_strength = 5,
+    .bow_release_strength = 0,
+    .bow_drawn_strength = 8,
 };
 
 static const u8 SupportedBuildId[8] = { 0x8E, 0x99, 0x78, 0xD5, 0x0B, 0xDD, 0x20, 0xB4 };
@@ -196,8 +198,16 @@ static void TrackValues(BotwState *state) {
         } else if (value < e->value && e->value - value <= 1000) {
             // Durability went down: the item was used
             if (t == BotwSlot_Shield && g_botw_settings.shield_hit_strength > 0) {
-                // Block impact
-                Pulse(state, 1, TriggerEffectVibration(0, g_botw_settings.shield_hit_strength, 60), g_botw_settings.shield_hit_ms * 1000000ULL);
+                // Block impact: the trigger pushes back for a moment, or buzzes
+                u8 strength = g_botw_settings.shield_hit_strength;
+                TriggerEffect impact;
+                if (g_botw_settings.shield_hit_style == 2) {
+                    impact = TriggerEffectVibration(0, strength, 60);
+                } else {
+                    const u8 stiff[10] = { strength, strength, strength, strength, strength, strength, strength, strength, strength, strength };
+                    impact = TriggerEffectFeedback(stiff);
+                }
+                Pulse(state, 1, impact, g_botw_settings.shield_hit_ms * 1000000ULL);
             } else if (t == BotwSlot_Sword && value <= LOW_DURABILITY) {
                 // Weapon about to break
                 Pulse(state, 0, TriggerEffectVibration(0, 8, 30), PULSE_NS);
@@ -277,10 +287,19 @@ bool BotwComputeEffects(BotwState *state, TriggerEffects *out) {
     const BotwEquippedItem *arrow  = &state->equipped[BotwSlot_Arrow];
     const BotwEquippedItem *shield = &state->equipped[BotwSlot_Shield];
 
-    // R2 draws the bow: tension grows with trigger travel, weak buzz when the bow is about to break
-    static const u8 BowDraw[10] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 8};
+    // R2 draws the bow: light tension growing with travel, much tighter once the bow is drawn (state 2),
+    // weak buzz when the bow is about to break
+    static const u8 BowReady[10] = {0, 0, 1, 2, 3, 3, 4, 4, 5, 5};
     if (bow->present && bow->value > 0 && arrow->present && arrow->value > 0) {
-        out->right = IsLow(bow) ? TriggerEffectVibration(2, 3, 20) : TriggerEffectFeedback(BowDraw);
+        if (IsLow(bow)) {
+            out->right = TriggerEffectVibration(2, 3, 20);
+        } else if (state->bow_state == 2) {
+            u8 s8 = g_botw_settings.bow_drawn_strength;
+            u8 drawn[10] = {0, (u8)(s8 / 4), (u8)(s8 / 2), (u8)(s8 * 3 / 4), s8, s8, s8, s8, s8, s8};
+            out->right = TriggerEffectFeedback(drawn);
+        } else {
+            out->right = TriggerEffectFeedback(BowReady);
+        }
     }
 
     // L2 raises the shield, only possible with a one-handed weapon (or none)

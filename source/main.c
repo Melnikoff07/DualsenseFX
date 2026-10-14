@@ -274,6 +274,10 @@ static void LoadConfig(void) {
             g_botw_settings.shield_hit_strength = value;
         } else if (sscanf(p, "shield_hit_ms = %u", &value) == 1 && value <= 2000) {
             g_botw_settings.shield_hit_ms = value;
+        } else if (sscanf(p, "shield_hit_style = %u", &value) == 1 && value >= 1 && value <= 2) {
+            g_botw_settings.shield_hit_style = value;
+        } else if (sscanf(p, "bow_drawn_strength = %u", &value) == 1 && value >= 1 && value <= 8) {
+            g_botw_settings.bow_drawn_strength = value;
         } else if (sscanf(p, "bow_release_strength = %u", &value) == 1 && value <= 8) {
             g_botw_settings.bow_release_strength = value;
         } else if (sscanf(p, "low_health_quarters = %u", &value) == 1 && value <= 120) {

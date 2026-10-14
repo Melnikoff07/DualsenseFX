@@ -41,9 +41,11 @@ typedef struct {
 // Tunables from config.ini
 typedef struct {
     u8 shield_hit_strength; // 0-8, 0 disables the block impact pulse
+    u8 shield_hit_style;    // 1 = trigger stiffens (push back), 2 = vibration
     u32 shield_hit_ms;
     u32 low_health_quarters; // heartbeat on the lightbar at or below this many quarter hearts, 0 disables
-    u8 bow_release_strength; // 0-8, pulse on R2 when an arrow is shot, 0 disables
+    u8 bow_release_strength; // 0-8, pulse on R2 when an arrow is shot, 0 disables (not felt: the finger is already off the trigger)
+    u8 bow_drawn_strength;   // 1-8, R2 resistance once the bow is drawn (bow state 2)
 } BotwSettings;
 
 extern BotwSettings g_botw_settings;
