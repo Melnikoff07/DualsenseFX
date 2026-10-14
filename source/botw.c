@@ -287,10 +287,10 @@ bool BotwComputeEffects(BotwState *state, TriggerEffects *out) {
     const BotwEquippedItem *arrow  = &state->equipped[BotwSlot_Arrow];
     const BotwEquippedItem *shield = &state->equipped[BotwSlot_Shield];
 
-    // R2 draws the bow: light tension growing with travel, much tighter once the bow is drawn (state 2),
-    // weak buzz when the bow is about to break
-    static const u8 BowReady[10] = {0, 0, 1, 2, 3, 3, 4, 4, 5, 5};
-    if (bow->present && bow->value > 0 && arrow->present && arrow->value > 0) {
+    // R2 follows the bow state: free until an arrow is being nocked (state 1, light tension),
+    // tight once the bow is drawn (state 2), weak buzz while drawing a bow that is about to break
+    static const u8 BowNocking[10] = {0, 0, 1, 2, 3, 3, 4, 4, 5, 5};
+    if (bow->present && bow->value > 0 && arrow->present && arrow->value > 0 && (state->bow_state == 1 || state->bow_state == 2)) {
         if (IsLow(bow)) {
             out->right = TriggerEffectVibration(2, 3, 20);
         } else if (state->bow_state == 2) {
@@ -298,7 +298,7 @@ bool BotwComputeEffects(BotwState *state, TriggerEffects *out) {
             u8 drawn[10] = {0, (u8)(s8 / 4), (u8)(s8 / 2), (u8)(s8 * 3 / 4), s8, s8, s8, s8, s8, s8};
             out->right = TriggerEffectFeedback(drawn);
         } else {
-            out->right = TriggerEffectFeedback(BowReady);
+            out->right = TriggerEffectFeedback(BowNocking);
         }
     }
 
