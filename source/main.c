@@ -12,6 +12,7 @@
 #include <sys/stat.h>
 #include "dmntcht.h"
 #include "mc.h"
+#include "botw.h"
 
 #define BOTW_PROGRAM_ID 0x01007EF00011E000ULL
 
@@ -81,7 +82,7 @@ void __appExit(void) {
 
 // ---- logging ----
 
-static void LogLine(const char *fmt, ...) {
+void LogLine(const char *fmt, ...) {
     FILE *f = fopen(LOG_PATH, "a");
     if (f == NULL) {
         return;
@@ -308,6 +309,7 @@ typedef struct {
     bool dmnt_open;
     bool mc_open;
     DmntCheatProcessMetadata meta;
+    BotwState botw;
 } GameSession;
 
 static bool GetCurrentApplication(u64 *out_pid, u64 *out_program_id) {
@@ -389,6 +391,7 @@ static void TryAttach(GameSession *s) {
     LogLine("attached to BotW after %u tries", s->attach_tries + 1);
     LogMetadata(&s->meta);
     CheckMemoryRead(&s->meta);
+    BotwInit(&s->botw, &s->meta);
 
     if (R_SUCCEEDED(rc = mcInitialize())) {
         s->mc_open = true;
@@ -448,6 +451,7 @@ static void Update(GameSession *s) {
 
     if (s->state == SessionState_Active) {
         UpdateWatches(&s->meta);
+        BotwUpdate(&s->botw, &s->meta);
     }
 
     if (s->state == SessionState_Attaching) {
