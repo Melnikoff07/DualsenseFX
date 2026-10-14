@@ -34,6 +34,14 @@ typedef struct {
     bool effects_off_logged;
 } BotwState;
 
+// Tunables from config.ini
+typedef struct {
+    u8 shield_hit_strength; // 0-8, 0 disables the block impact pulse
+    u32 shield_hit_ms;
+} BotwSettings;
+
+extern BotwSettings g_botw_settings;
+
 void BotwInit(BotwState *state, const DmntCheatProcessMetadata *meta);
 void BotwUpdate(BotwState *state, const DmntCheatProcessMetadata *meta);
 

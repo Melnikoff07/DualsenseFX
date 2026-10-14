@@ -269,13 +269,18 @@ static void LoadConfig(void) {
         }
         if (sscanf(p, "attach_delay_s = %u", &value) == 1 && value <= 600) {
             g_attach_delay_s = value;
+        } else if (sscanf(p, "shield_hit_strength = %u", &value) == 1 && value <= 8) {
+            g_botw_settings.shield_hit_strength = value;
+        } else if (sscanf(p, "shield_hit_ms = %u", &value) == 1 && value <= 2000) {
+            g_botw_settings.shield_hit_ms = value;
         } else if (strncmp(p, "watch=", 6) == 0) {
             ParseWatch(p + 6);
         }
     }
     fclose(f);
 
-    LogLine("config: attach_delay_s=%u, %u watches", g_attach_delay_s, g_num_watches);
+    LogLine("config: attach_delay_s=%u, shield_hit_strength=%u, shield_hit_ms=%u, %u watches",
+            g_attach_delay_s, g_botw_settings.shield_hit_strength, g_botw_settings.shield_hit_ms, g_num_watches);
     for (u32 i = 0; i < g_num_watches; ++i) {
         const Watch *w = &g_watches[i];
         char chain[128] = {0};

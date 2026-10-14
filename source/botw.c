@@ -41,6 +41,11 @@ void LogLine(const char *fmt, ...);
 #define LOW_DURABILITY         300                  // 3 hits left
 #define SCAN_CHUNK_ITEMS       12
 
+BotwSettings g_botw_settings = {
+    .shield_hit_strength = 4,
+    .shield_hit_ms = 200,
+};
+
 static const u8 SupportedBuildId[8] = { 0x8E, 0x99, 0x78, 0xD5, 0x0B, 0xDD, 0x20, 0xB4 };
 
 static const char *SlotNames[BotwSlot_Count] = { "sword", "bow", "arrow", "shield" };
@@ -90,9 +95,9 @@ static void Settle(BotwState *state, const char *why) {
     }
 }
 
-static void Pulse(BotwState *state, int trigger, TriggerEffect effect) {
+static void Pulse(BotwState *state, int trigger, TriggerEffect effect, u64 duration_ns) {
     state->pulse_effect[trigger] = effect;
-    state->pulse_until_tick[trigger] = armGetSystemTick() + armNsToTicks(PULSE_NS);
+    state->pulse_until_tick[trigger] = armGetSystemTick() + armNsToTicks(duration_ns);
 }
 
 static void ScanPouch(BotwState *state) {
@@ -183,10 +188,12 @@ static void TrackValues(BotwState *state) {
             Settle(state, "values reset, save loading");
         } else if (value < e->value && e->value - value <= 1000) {
             // Durability went down: the item was used
-            if (t == BotwSlot_Shield) {
-                Pulse(state, 1, TriggerEffectVibration(0, 8, 60));   // block impact
+            if (t == BotwSlot_Shield && g_botw_settings.shield_hit_strength > 0) {
+                // Block impact
+                Pulse(state, 1, TriggerEffectVibration(0, g_botw_settings.shield_hit_strength, 60), g_botw_settings.shield_hit_ms * 1000000ULL);
             } else if (t == BotwSlot_Sword && value <= LOW_DURABILITY) {
-                Pulse(state, 0, TriggerEffectVibration(0, 8, 30));   // weapon about to break
+                // Weapon about to break
+                Pulse(state, 0, TriggerEffectVibration(0, 8, 30), PULSE_NS);
             }
         }
         e->value = value;
