@@ -28,6 +28,16 @@ typedef enum {
     HapticPattern_BombExplode,
     HapticPattern_CryonisRise,  // a pillar grows out of the water (~1 s)
     HapticPattern_CryonisBreak,
+    // From the game's sounds (sounds.c)
+    HapticPattern_Jump,
+    HapticPattern_LandSoft,
+    HapticPattern_ClimbGrip,
+    HapticPattern_WaterSplash,
+    HapticPattern_SwimStroke,
+    HapticPattern_ChestOpen,
+    HapticPattern_ItemGet,
+    HapticPattern_Roll,
+    HapticPattern_CrateBreak,
     HapticPattern_Count,
 } HapticPattern;
 
@@ -38,10 +48,20 @@ typedef enum {
     HapticLoop_Count,
 } HapticLoop;
 
+// Strength groups, each with its own slider (percent, 0 turns the group off)
+typedef enum {
+    HapticGroup_Combat,     // weapon hits, shield, bow, weapon breaking, Daruk
+    HapticGroup_Body,       // damage, healing, heartbeat, stamina, landing, surfing
+    HapticGroup_Runes,      // bombs, Magnesis, Stasis, Cryonis
+    HapticGroup_World,      // water, chests, items, rolling, jumping, climbing, crates
+    HapticGroup_Footsteps,
+    HapticGroup_Count,
+} HapticGroup;
+
 typedef struct {
     bool enabled;       // haptics=1 in config.ini
     u32 strength;       // percent, scales every pattern
-    u32 footsteps;      // percent, 0 disables footstep taps
+    u32 group[HapticGroup_Count];
 } HapticSettings;
 
 extern HapticSettings g_haptic_settings;
@@ -53,8 +73,8 @@ void HapticsSetAvailable(bool available);
 void HapticsPlay(HapticPattern pattern, float amount);
 
 // One footstep on the given ground material (BotW material index), in the hand of the foot that stepped;
-// strength in percent of the footstep_strength setting
-void HapticsPlayStep(u32 material, bool left);
+// amount 0.0-1.0 (pace, heel or toe)
+void HapticsPlayStep(u32 material, bool left, float amount);
 
 // Continuous textures, only sent when the state changes
 void HapticsSetLoop(HapticLoop loop, bool on);

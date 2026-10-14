@@ -60,14 +60,7 @@ typedef struct {
     u32 rune_selected;
     bool cryonis_event;     // event bit seen on the last fast poll
 
-    // Footsteps, from the game's own step sounds (see botw.c)
-    u32 ground_material;
-    u64 wave_pool;          // nn::atk WaveSound pool, 0 until found and checked
-    u64 wave_pool_check_tick;
-    bool wave_serials_valid;
-    u32 wave_serials[64];
-    u64 last_step_tick;
-    bool step_left;
+    u32 ground_material;    // player +1CA8
 } BotwState;
 
 // Tunables from config.ini
@@ -82,6 +75,7 @@ typedef struct {
     u8 surf_rumble_strength; // 0-8, continuous light vibration on both triggers while surfing, 0 disables
     u32 surf_timeout_ms;     // surfing ends after this long without shield wear
     u8 daruk_strength;       // 0-8, vibration on both triggers when Daruk's Protection blocks a hit, 0 disables (lightbar flash stays)
+    bool triggers;           // adaptive trigger effects at all
 } BotwSettings;
 
 extern BotwSettings g_botw_settings;

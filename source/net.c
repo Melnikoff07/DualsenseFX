@@ -35,6 +35,7 @@ static const char *AllowedDirs[] = {
     "sdmc:/config/MissionControl/",
     "sdmc:/atmosphere/contents/42000000000d5e00/",
     "sdmc:/atmosphere/contents/010000000000bd00/",
+    "sdmc:/switch/.overlays/dualsense_fx.ovl",     // the settings overlay
 };
 
 // Small buffers: this is a sysmodule, transfer memory comes from our own heap (~170 KB)

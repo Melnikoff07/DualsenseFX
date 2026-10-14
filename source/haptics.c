@@ -8,7 +8,7 @@
 
 void LogVerbose(const char *fmt, ...);
 
-HapticSettings g_haptic_settings = { .enabled = true, .strength = 100, .footsteps = 100 };
+HapticSettings g_haptic_settings = { .enabled = true, .strength = 100, .group = { 100, 100, 100, 100, 50 } };
 
 #define NOISE McHapticFlag_Noise
 #define LOOP  McHapticFlag_Loop
@@ -22,129 +22,161 @@ typedef struct {
 
 typedef struct {
     const char *name;
+    u8 group;
     u32 count;
     VoiceDef voices[MC_HAPTIC_VOICES_MAX];
 } PatternDef;
 
 static const PatternDef Patterns[HapticPattern_Count] = {
-    [HapticPattern_HitSword] = { "hit sword", 2, {
+    [HapticPattern_HitSword] = { "hit sword", HapticGroup_Combat, 2, {
         { 0,     120, 230, 220, 130,   0,   2,  12,  70 },  // crisp knock
         { NOISE,  90, 160, 180, 180,   0,   1,   8,  60 },  // body of the impact
     }},
-    [HapticPattern_HitHeavy] = { "hit heavy", 2, {
+    [HapticPattern_HitHeavy] = { "hit heavy", HapticGroup_Combat, 2, {
         { 0,     255, 255,  75,  40,   0,   4,  40, 200 },  // deep thud
         { NOISE, 180, 200, 140, 140,   0,   2,  30, 160 },
     }},
-    [HapticPattern_HitSpear] = { "hit spear", 2, {
+    [HapticPattern_HitSpear] = { "hit spear", HapticGroup_Combat, 2, {
         { 0,      80, 220, 300, 180,   0,   1,   8,  45 },  // short sharp poke
         { NOISE,  60, 140, 300, 300,   0,   1,   5,  35 },
     }},
-    [HapticPattern_ShieldBlock] = { "shield block", 2, {
+    [HapticPattern_ShieldBlock] = { "shield block", HapticGroup_Combat, 2, {
         { 0,     255, 150,  95,  55,   0,   2,  35, 170 },  // heavy knock into the shield hand
         { NOISE, 200, 110, 220, 220,   0,   1,  20, 110 },
     }},
-    [HapticPattern_BowNock] = { "bow nock", 1, {
+    [HapticPattern_BowNock] = { "bow nock", HapticGroup_Combat, 1, {
         { 0,      60, 140, 280, 280,   0,   1,   6,  25 },  // tiny click of the arrow on the string
     }},
-    [HapticPattern_BowRelease] = { "bow release", 3, {
+    [HapticPattern_BowRelease] = { "bow release", HapticGroup_Combat, 3, {
         { 0,     180, 255, 240,  90,   0,   1,  10,  80 },  // string snap
         { NOISE, 120, 200, 450, 450,   0,   1,   4,  40 },
         { 0,     140, 100,  60,  60,  15,   3,  20, 120 },  // recoil into the bow hand
     }},
-    [HapticPattern_Damage] = { "damage", 2, {
+    [HapticPattern_Damage] = { "damage", HapticGroup_Body, 2, {
         { NOISE, 255, 255, 110, 110,   0,   3,  60, 260 },  // rough hit, scaled with the hearts lost
         { 0,     220, 220,  55,  35,   0,   5,  50, 250 },
     }},
-    [HapticPattern_Heal] = { "heal", 1, {
+    [HapticPattern_Heal] = { "heal", HapticGroup_Body, 1, {
         { 0,      90,  90, 110, 170,   0, 180, 120, 380 },  // soft warm swell
     }},
-    [HapticPattern_Heartbeat] = { "heartbeat", 2, {
+    [HapticPattern_Heartbeat] = { "heartbeat", HapticGroup_Body, 2, {
         { 0,     200, 200,  58,  58,   0,   6,  45,  90 },  // lub
         { 0,     140, 140,  48,  48, 250,   6,  40, 110 },  // dub
     }},
-    [HapticPattern_Daruk] = { "daruk", 2, {
+    [HapticPattern_Daruk] = { "daruk", HapticGroup_Combat, 2, {
         { 0,     255, 255, 180,  35,   0,   3,  90, 450 },  // shockwave of the barrier
         { NOISE, 200, 200, 260,  80,   0,   2,  60, 300 },
     }},
-    [HapticPattern_WeaponBreak] = { "weapon break", 3, {
+    [HapticPattern_WeaponBreak] = { "weapon break", HapticGroup_Combat, 3, {
         { NOISE, 200, 255, 700, 200,   0,   1,  30, 160 },  // crunch
         { 0,     220, 220, 150,  55,   0,   2,  20, 180 },
         { NOISE, 120, 150, 400, 400,  90,   1,  10,  90 },  // falling pieces
     }},
-    [HapticPattern_Landing] = { "landing", 2, {
+    [HapticPattern_Landing] = { "landing", HapticGroup_Body, 2, {
         { 0,     255, 255,  70,  35,   0,   2,  20, 170 },  // scaled with the fall time
         { NOISE, 180, 180, 160, 160,   0,   1,  15, 110 },
     }},
-    [HapticPattern_SurfBump] = { "surf bump", 1, {
+    [HapticPattern_SurfBump] = { "surf bump", HapticGroup_Body, 1, {
         { NOISE, 140, 140, 200, 200,   0,   1,  10,  70 },
     }},
-    [HapticPattern_StaminaEmpty] = { "stamina empty", 3, {
+    [HapticPattern_StaminaEmpty] = { "stamina empty", HapticGroup_Body, 3, {
         { 0,     110, 110,  50,  50,   0,  20,  40,  80 },  // tired, fading pulses
         { 0,      90,  90,  50,  50, 330,  20,  40,  80 },
         { 0,      70,  70,  50,  50, 660,  20,  40,  80 },
     }},
-    [HapticPattern_RuneOn] = { "rune on", 1, {
+    [HapticPattern_RuneOn] = { "rune on", HapticGroup_Runes, 1, {
         { 0,      80,  80,  90, 150,   0,  60,  40, 150 },  // soft rising swell of the Sheikah Slate
     }},
-    [HapticPattern_RuneLock] = { "rune lock", 1, {
+    [HapticPattern_RuneLock] = { "rune lock", HapticGroup_Runes, 1, {
         { 0,     110, 110, 220, 260,   0,   1,  10,  40 },  // small click on the target
     }},
-    [HapticPattern_MagnesisGrab] = { "magnesis grab", 2, {
+    [HapticPattern_MagnesisGrab] = { "magnesis grab", HapticGroup_Runes, 2, {
         { 0,     230, 230,  80,  50,   0,   2,  40, 160 },  // heavy clunk
         { NOISE, 170, 170, 250, 250,   0,   1,  10,  60 },
     }},
-    [HapticPattern_MagnesisDrop] = { "magnesis drop", 1, {
+    [HapticPattern_MagnesisDrop] = { "magnesis drop", HapticGroup_Runes, 1, {
         { 0,     150, 150,  60,  40,   0,   2,  20, 140 },
     }},
-    [HapticPattern_StasisFreeze] = { "stasis freeze", 3, {
+    [HapticPattern_StasisFreeze] = { "stasis freeze", HapticGroup_Runes, 3, {
         { 0,     220, 220, 320, 200,   0,   1,  15,  90 },  // sharp crack
         { NOISE, 200, 200, 500, 500,   0,   1,   5,  40 },
         { 0,     160, 160,  70,  70,  30,   3,  40, 200 },  // weight of the stopped object
     }},
-    [HapticPattern_StasisTick] = { "stasis tick", 1, {
+    [HapticPattern_StasisTick] = { "stasis tick", HapticGroup_Runes, 1, {
         { 0,     150, 150, 180, 180,   0,   1,   8,  25 },
     }},
-    [HapticPattern_StasisRelease] = { "stasis release", 2, {
+    [HapticPattern_StasisRelease] = { "stasis release", HapticGroup_Runes, 2, {
         { 0,     230, 230,  50,  35,   0,   3,  30, 220 },  // the stored force lets go
         { NOISE, 150, 150, 150, 150,   0,   2,  20, 160 },
     }},
-    [HapticPattern_BombSpawn] = { "bomb spawn", 1, {
+    [HapticPattern_BombSpawn] = { "bomb spawn", HapticGroup_Runes, 1, {
         { 0,      90,  90, 160, 100,   0,   1,  10,  60 },  // light pop
     }},
-    [HapticPattern_BombExplode] = { "bomb explode", 3, {
+    [HapticPattern_BombExplode] = { "bomb explode", HapticGroup_Runes, 3, {
         { 0,     255, 255,  60,  25,   0,   2, 120, 600 },  // blast
         { NOISE, 255, 255, 300,  80,   0,   1,  60, 450 },
         { NOISE, 150, 150, 120, 120, 120,  30, 100, 600 },  // rumbling debris
     }},
-    [HapticPattern_CryonisRise] = { "cryonis rise", 3, {
+    [HapticPattern_CryonisRise] = { "cryonis rise", HapticGroup_Runes, 3, {
         { NOISE, 112, 112, 120, 200,   0, 300, 600, 200 },  // grinding ice, growing for about a second
         { 0,      96,  96,  60,  90,   0, 200, 700, 200 },
         { NOISE, 200, 200, 600, 600,1000,   1,  10,  80 },  // crack when the pillar stands
     }},
-    [HapticPattern_CryonisBreak] = { "cryonis break", 3, {
+    [HapticPattern_CryonisBreak] = { "cryonis break", HapticGroup_Runes, 3, {
         { NOISE, 230, 230, 700, 200,   0,   1,  30, 200 },  // shatter
         { 0,     180, 180, 150,  60,   0,   1,  20, 150 },
         { NOISE, 120, 120, 400, 400,  80,   5,  30, 250 },  // falling shards
+    }},
+    [HapticPattern_Jump] = { "jump", HapticGroup_World, 1, {
+        { 0,      70,  70,  80,  60,   0,   1,  10,  60 },  // push off
+    }},
+    [HapticPattern_LandSoft] = { "land", HapticGroup_World, 1, {
+        { 0,     110, 110,  60,  45,   0,   2,  15, 110 },
+    }},
+    [HapticPattern_ClimbGrip] = { "climb grip", HapticGroup_World, 1, {
+        { NOISE,  45,  45, 300, 300,   0,   1,   5,  40 },
+    }},
+    [HapticPattern_WaterSplash] = { "water splash", HapticGroup_World, 2, {
+        { NOISE, 160, 160, 200,  80,   0,   2,  60, 300 },
+        { 0,     110, 110,  55,  40,   0,   3,  30, 200 },
+    }},
+    [HapticPattern_SwimStroke] = { "swim stroke", HapticGroup_World, 1, {
+        { NOISE,  70,  70, 150, 110,   0,  40,  60, 200 },  // water pushed aside
+    }},
+    [HapticPattern_ChestOpen] = { "chest open", HapticGroup_World, 2, {
+        { 0,     120, 120,  90,  60,   0,   5,  80, 200 },  // heavy lid
+        { NOISE,  60,  60, 400, 300,  40,  10,  60, 150 },  // creak
+    }},
+    [HapticPattern_ItemGet] = { "item get", HapticGroup_World, 1, {
+        { 0,      70,  70, 300, 500,   0,  10,  30, 120 },  // small rising sparkle
+    }},
+    [HapticPattern_Roll] = { "roll", HapticGroup_World, 1, {
+        { NOISE,  90,  90, 120, 100,   0,  30, 120, 150 },
+    }},
+    [HapticPattern_CrateBreak] = { "crate break", HapticGroup_World, 2, {
+        { NOISE, 180, 180, 600, 200,   0,   1,  20, 150 },
+        { 0,     140, 140, 120,  60,   0,   1,  15, 120 },
     }},
 };
 
 // Looping textures use fixed slots, one-shot patterns take the remaining slots in turn so that quick events in a row
 // don't cut each other off
 typedef struct {
+    u8 group;
     u32 count;
     u8 slots[2];
     VoiceDef voices[2];
 } LoopDef;
 
 static const LoopDef Loops[HapticLoop_Count] = {
-    [HapticLoop_BowTension] = { 2, { 0, 1 }, {
+    [HapticLoop_BowTension] = { HapticGroup_Combat, 2, { 0, 1 }, {
         { NOISE | LOOP, 70, 45,  70,  70,   0,  900, 0, 0 },  // faint shaking of the drawn string
         { LOOP,         50, 30,  40,  55,   0, 1200, 0, 0 },  // slowly rising strain
     }},
-    [HapticLoop_Surf] = { 1, { 2 }, {
+    [HapticLoop_Surf] = { HapticGroup_Body, 1, { 2 }, {
         { NOISE | LOOP, 75, 75, 110, 110,   0,  150, 0, 0 },  // gravel under the shield
     }},
-    [HapticLoop_Magnesis] = { 2, { 3, 4 }, {
+    [HapticLoop_Magnesis] = { HapticGroup_Runes, 2, { 3, 4 }, {
         { LOOP,         36, 36,  55,  60,   0,  300, 0, 0 },  // magnetic hum (tuned down with the user)
         { NOISE | LOOP, 20, 20,  90,  90,   0,  300, 0, 0 },
     }},
@@ -163,7 +195,10 @@ static const StepDef Steps[] = {
     [4] = { 2, {{ 0,     50, 50, 300, 300, 0,  1,  5, 120 }, { 0,     25, 25, 450, 450, 0, 1,  3, 80 }}},  // metal: ringing tap
     [6] = { 2, {{ NOISE, 35, 35, 400, 350, 0, 15, 20,  70 }, { 0,     30, 30,  60,  60, 0, 2,  5, 40 }}},  // grass: swish
     [7] = { 2, {{ 0,     75, 75, 180, 120, 0,  1,  6,  60 }, { 0,     40, 40,  90,  90, 0, 1,  5, 80 }}},  // wood: hollow knock
+    [8] = { 1, {{ NOISE, 60, 60, 300, 250, 0,  5, 40, 150 }}},                                            // shallow water: splash
     [9] = { 1, {{ NOISE, 55, 55, 180, 160, 0,  8, 30,  90 }}},                                            // snow: crunch
+    [10] = { 2, {{ 0,    60, 60, 260, 220, 0,  1,  4,  40 }, { NOISE, 30, 30, 900, 900, 0, 1,  2, 20 }}},  // ice: hard, glassy
+    [14] = { 1, {{ NOISE, 30, 30, 200, 180, 0, 10, 15,  60 }}},                                           // cloth, carpet: muffled
 };
 
 #define FIRST_ONESHOT_SLOT 5
@@ -214,7 +249,14 @@ void HapticsPlay(HapticPattern pattern, float amount) {
     float factor = 1.0f;
     if (pattern == HapticPattern_Damage || pattern == HapticPattern_Landing) {
         factor = amount < 0.3f ? 0.3f : amount > 1.0f ? 1.0f : amount;
+    } else if (pattern >= HapticPattern_Jump) {
+        factor = amount > 1.0f ? 1.0f : amount;
     }
+    u32 group = g_haptic_settings.group[p->group];
+    if (group == 0) {
+        return;
+    }
+    factor *= group / 100.0f;
 
     McHapticVoice voices[MC_HAPTIC_VOICES_MAX];
     for (u32 i = 0; i < p->count; ++i) {
@@ -225,14 +267,15 @@ void HapticsPlay(HapticPattern pattern, float amount) {
     LogVerbose("haptics: %s%s", p->name, R_FAILED(rc) ? " (failed)" : "");
 }
 
-void HapticsPlayStep(u32 material, bool left) {
-    if (!g_available || !g_haptic_settings.enabled || g_haptic_settings.footsteps == 0) {
+void HapticsPlayStep(u32 material, bool left, float amount) {
+    u32 group = g_haptic_settings.group[HapticGroup_Footsteps];
+    if (!g_available || !g_haptic_settings.enabled || group == 0) {
         return;
     }
     const StepDef *s = material < sizeof(Steps) / sizeof(Steps[0]) && Steps[material].count ? &Steps[material] : &Steps[1];
     McHapticVoice voices[2];
     for (u32 i = 0; i < s->count; ++i) {
-        voices[i] = MakeVoice(&s->voices[i], g_next_slot, g_haptic_settings.footsteps / 100.0f);
+        voices[i] = MakeVoice(&s->voices[i], g_next_slot, amount * group / 100.0f);
         // The other hand gets a softer copy, steps alternate between the hands
         u8 *soft = left ? &voices[i].amp_right : &voices[i].amp_left;
         *soft = *soft * 6 / 10;
@@ -245,7 +288,8 @@ void HapticsSetLoop(HapticLoop loop, bool on) {
     if (!g_available || loop >= HapticLoop_Count) {
         return;
     }
-    on = on && g_haptic_settings.enabled;
+    const LoopDef *def = &Loops[loop];
+    on = on && g_haptic_settings.enabled && g_haptic_settings.group[def->group] > 0;
     if (g_loop_on[loop] == on) {
         return;
     }
@@ -254,7 +298,7 @@ void HapticsSetLoop(HapticLoop loop, bool on) {
     McHapticVoice voices[MC_HAPTIC_VOICES_MAX];
     for (u32 i = 0; i < l->count; ++i) {
         // Off: amplitude 0 stops the slot
-        voices[i] = MakeVoice(&l->voices[i], l->slots[i], on ? 1.0f : 0.0f);
+        voices[i] = MakeVoice(&l->voices[i], l->slots[i], on ? g_haptic_settings.group[l->group] / 100.0f : 0.0f);
         if (!on) {
             voices[i].amp_left = voices[i].amp_right = 0;
         }

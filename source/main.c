@@ -325,7 +325,17 @@ static void LoadConfig(void) {
         } else if (sscanf(p, "haptics_strength = %u", &value) == 1 && value <= 200) {
             g_haptic_settings.strength = value;
         } else if (sscanf(p, "footstep_strength = %u", &value) == 1 && value <= 200) {
-            g_haptic_settings.footsteps = value;
+            g_haptic_settings.group[HapticGroup_Footsteps] = value;
+        } else if (sscanf(p, "combat_strength = %u", &value) == 1 && value <= 200) {
+            g_haptic_settings.group[HapticGroup_Combat] = value;
+        } else if (sscanf(p, "body_strength = %u", &value) == 1 && value <= 200) {
+            g_haptic_settings.group[HapticGroup_Body] = value;
+        } else if (sscanf(p, "rune_strength = %u", &value) == 1 && value <= 200) {
+            g_haptic_settings.group[HapticGroup_Runes] = value;
+        } else if (sscanf(p, "world_strength = %u", &value) == 1 && value <= 200) {
+            g_haptic_settings.group[HapticGroup_World] = value;
+        } else if (sscanf(p, "triggers = %u", &value) == 1) {
+            g_botw_settings.triggers = value != 0;
         } else if (sscanf(p, "low_health_quarters = %u", &value) == 1 && value <= 120) {
             g_botw_settings.low_health_quarters = value;
         } else if (sscanf(p, "search = %u", &value) == 1) {
@@ -348,7 +358,10 @@ static void LoadConfig(void) {
     LogLine("config: verbose=%u", g_verbose);
     LogLine("config: attach_delay_s=%u, shield_hit_strength=%u, shield_hit_ms=%u, low_health_quarters=%u, %u watches",
             g_attach_delay_s, g_botw_settings.shield_hit_strength, g_botw_settings.shield_hit_ms, g_botw_settings.low_health_quarters, g_num_watches);
-    LogLine("config: haptics=%u, haptics_strength=%u, footstep_strength=%u", g_haptic_settings.enabled, g_haptic_settings.strength, g_haptic_settings.footsteps);
+    LogLine("config: triggers=%u, haptics=%u, haptics_strength=%u, combat %u, body %u, runes %u, world %u, footsteps %u",
+            g_botw_settings.triggers, g_haptic_settings.enabled, g_haptic_settings.strength,
+            g_haptic_settings.group[HapticGroup_Combat], g_haptic_settings.group[HapticGroup_Body], g_haptic_settings.group[HapticGroup_Runes],
+            g_haptic_settings.group[HapticGroup_World], g_haptic_settings.group[HapticGroup_Footsteps]);
     LogLine("config: net=%u, net_port=%u, token %s", g_net_settings.enabled, g_net_settings.port, g_net_settings.token[0] ? "set" : "empty");
     if (g_search_settings.enabled) {
         LogLine("config: search mode %u, region +%X size %X", g_search_settings.mode, g_search_settings.offset, g_search_settings.size);
@@ -369,7 +382,32 @@ static void LoadConfig(void) {
 }
 
 void ReloadConfig(void) {
+    g_num_watches = 0;      // they are read again
     LoadConfig();
+}
+
+// The overlay (or anything else) writes config.ini, the module picks the change up within a second
+static void CheckConfigChanged(void) {
+    static u64 next_tick;
+    static time_t last_mtime;
+    static off_t last_size;
+    static bool have;
+    u64 now = armGetSystemTick();
+    if (now < next_tick) {
+        return;
+    }
+    next_tick = now + armNsToTicks(1000000000ULL);
+    struct stat st;
+    if (stat(CONFIG_PATH, &st) != 0) {
+        return;
+    }
+    if (have && (st.st_mtime != last_mtime || st.st_size != last_size)) {
+        LogLine("config.ini changed, reloading");
+        ReloadConfig();
+    }
+    last_mtime = st.st_mtime;
+    last_size = st.st_size;
+    have = true;
 }
 
 // ---- game session ----
@@ -661,6 +699,7 @@ int main(int argc, char **argv) {
             .botw = &session.botw,
         };
         NetUpdate(&net);
+        CheckConfigChanged();
         if (session.state == SessionState_Active) {
             BotwPollFast(&session.botw);
         }
