@@ -58,7 +58,7 @@ BotwSettings g_botw_settings = {
     .low_health_quarters = 4,
     .bow_release_strength = 0,
     .bow_drawn_strength = 8,
-    .daruk_strength = 8,
+    .daruk_strength = 5,
 };
 
 static const u8 SupportedBuildId[8] = { 0x8E, 0x99, 0x78, 0xD5, 0x0B, 0xDD, 0x20, 0xB4 };
@@ -236,6 +236,11 @@ static void UpdateBow(BotwState *state) {
     if (bow_state == 3 && state->bow_state == 2 && g_botw_settings.bow_release_strength > 0) {
         Pulse(state, 0, TriggerEffectVibration(0, g_botw_settings.bow_release_strength, 45), 120 * 1000000ULL);
     }
+
+    // Shot or cancelled: keep the light tension for a moment so the next pull already has it
+    if (state->bow_state != 0 && (bow_state == 3 || bow_state == 0)) {
+        state->bow_active_until_tick = armGetSystemTick() + armNsToTicks(1500 * 1000000ULL);
+    }
     state->bow_state = bow_state;
 }
 
@@ -248,10 +253,12 @@ static void UpdateActionFlags(BotwState *state) {
     // Daruk's Protection blocked a hit: strong push on L2 and an orange flash
     if ((flags & ACTION_DARUK_BLOCK) && !(state->action_flags & ACTION_DARUK_BLOCK)) {
         LogLine("botw: Daruk's Protection blocked a hit");
+        // Vibration on both triggers: felt whichever trigger the finger is on (often ZR while aiming),
+        // a push-back would only be felt on a trigger that is being pressed
         u8 k = g_botw_settings.daruk_strength;
         if (k > 0) {
-            const u8 stiff[10] = { k, k, k, k, k, k, k, k, k, k };
-            Pulse(state, 1, TriggerEffectFeedback(stiff), 400 * 1000000ULL);
+            Pulse(state, 0, TriggerEffectVibration(0, k, 40), 300 * 1000000ULL);
+            Pulse(state, 1, TriggerEffectVibration(0, k, 40), 300 * 1000000ULL);
         }
         state->flash_until_tick = armGetSystemTick() + armNsToTicks(400 * 1000000ULL);
     }
@@ -315,7 +322,8 @@ bool BotwComputeEffects(BotwState *state, TriggerEffects *out) {
     // R2 follows the bow state: free until an arrow is being nocked (state 1, light tension),
     // tight once the bow is drawn (state 2), weak buzz while drawing a bow that is about to break
     static const u8 BowNocking[10] = {0, 0, 1, 2, 3, 3, 4, 4, 5, 5};
-    if (bow->present && bow->value > 0 && arrow->present && arrow->value > 0 && (state->bow_state == 1 || state->bow_state == 2)) {
+    bool bow_in_use = state->bow_state != 0 || now < state->bow_active_until_tick;
+    if (bow->present && bow->value > 0 && arrow->present && arrow->value > 0 && bow_in_use) {
         if (IsLow(bow)) {
             out->right = TriggerEffectVibration(2, 3, 20);
         } else if (state->bow_state == 2) {

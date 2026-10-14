@@ -498,7 +498,7 @@ static void Update(GameSession *s) {
             if (want && (!s->lightbar_set || memcmp(rgb, s->lightbar, 3) != 0)) {
                 if (R_SUCCEEDED(mcSetLightbarColour(rgb[0], rgb[1], rgb[2]))) {
                     if (!s->lightbar_set) {
-                        LogLine("lightbar: low health heartbeat on");
+                        LogLine("lightbar: override on (heartbeat or flash)");
                     }
                     memcpy(s->lightbar, rgb, 3);
                     s->lightbar_set = true;

@@ -30,6 +30,7 @@ typedef struct {
     s32 last_hearts;
     u64 player;             // player actor, refreshed every scan
     u32 bow_state;          // player +1F88: 0 none, 1 nocking, 2 drawn, 3 shot
+    u64 bow_active_until_tick; // keep light bow tension shortly after a shot, for rapid fire
     u32 action_flags;       // player +C40
     u64 flash_until_tick;   // lightbar flash (Daruk's Protection)
     u64 hearts_changed_tick;
@@ -48,7 +49,7 @@ typedef struct {
     u32 low_health_quarters; // heartbeat on the lightbar at or below this many quarter hearts, 0 disables
     u8 bow_release_strength; // 0-8, pulse on R2 when an arrow is shot, 0 disables (not felt: the finger is already off the trigger)
     u8 bow_drawn_strength;   // 1-8, R2 resistance once the bow is drawn (bow state 2)
-    u8 daruk_strength;       // 0-8, L2 push when Daruk's Protection blocks a hit, 0 disables (lightbar flash stays)
+    u8 daruk_strength;       // 0-8, vibration on both triggers when Daruk's Protection blocks a hit, 0 disables (lightbar flash stays)
 } BotwSettings;
 
 extern BotwSettings g_botw_settings;
