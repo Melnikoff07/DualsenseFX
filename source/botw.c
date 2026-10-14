@@ -214,6 +214,10 @@ static void UpdatePlayer(BotwState *state, const DmntCheatProcessMetadata *meta)
     if (state->hearts == 0) {
         Settle(state, "player died");
     }
+    if (state->hearts != state->last_hearts) {
+        state->last_hearts = state->hearts;
+        state->hearts_changed_tick = armGetSystemTick();
+    }
 
     u64 equipped[4] = {0};
     bool menu_open = false;
@@ -289,6 +293,17 @@ u64 BotwGetPlayerActor(const DmntCheatProcessMetadata *meta) {
 bool BotwComputeLightbar(BotwState *state, u8 *r, u8 *g, u8 *b) {
     if (!state->supported || state->hearts <= 0 || g_botw_settings.low_health_quarters == 0 ||
         (u32)state->hearts > g_botw_settings.low_health_quarters) {
+        return false;
+    }
+
+    // While a save loads hearts read 1 for several seconds before the inventory appears:
+    // only trust a low value once the game is loaded (something equipped) or it has been stable for 3 s
+    bool loaded = false;
+    for (int t = 0; t < BotwSlot_Count; ++t) {
+        loaded |= state->equipped[t].present;
+    }
+    bool stable = armTicksToNs(armGetSystemTick() - state->hearts_changed_tick) >= 3000000000ULL;
+    if ((!loaded && !stable) || armGetSystemTick() < state->settle_until_tick) {
         return false;
     }
 

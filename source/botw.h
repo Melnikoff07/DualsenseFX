@@ -27,6 +27,8 @@ typedef struct {
     bool dumped[BotwSlot_Count];
 
     s32 hearts;             // quarter hearts, -1 if unreadable
+    s32 last_hearts;
+    u64 hearts_changed_tick;
     bool menu_open;         // pause menu open (mEquippedWeapons is only filled then)
     u64 settle_until_tick;  // effects stay off until then (death, save reload)
     u64 pulse_until_tick[2];// short event effects: [0] right trigger, [1] left trigger
