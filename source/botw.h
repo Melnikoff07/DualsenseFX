@@ -28,6 +28,8 @@ typedef struct {
 
     s32 hearts;             // quarter hearts, -1 if unreadable
     s32 last_hearts;
+    bool hearts_trusted;    // false until the hearts value is known to be real (see UpdatePlayer)
+    s32 hearts_at_attach;
     u64 player;             // player actor, refreshed every scan
     u32 bow_state;          // player +1F88: 0 none, 1 nocking, 2 drawn, 3 shot
     u64 bow_active_until_tick; // keep light bow tension shortly after a shot, for rapid fire

@@ -143,7 +143,7 @@ static bool InGame(const BotwState *state) {
     for (int t = 0; t < BotwSlot_Count; ++t) {
         loaded |= state->equipped[t].present;
     }
-    return loaded && state->hearts > 0 && armGetSystemTick() >= state->settle_until_tick;
+    return loaded && state->hearts_trusted && state->hearts > 0 && armGetSystemTick() >= state->settle_until_tick;
 }
 
 static void PlayBreak(BotwState *state, const char *what) {
@@ -400,6 +400,20 @@ static void UpdatePlayer(BotwState *state, const DmntCheatProcessMetadata *meta)
     if (state->hearts == 0) {
         Settle(state, "player died");
     }
+    // On the title screen hearts read 1 while the inventory is already filled. Trust the value once it is above that,
+    // or once it changes from what was read at attach (the save finished loading); that change is not an event.
+    if (!state->hearts_trusted && state->hearts > 0) {
+        if (state->hearts_at_attach == 0) {
+            state->hearts_at_attach = state->hearts;
+        }
+        if (state->hearts > 1 || state->hearts != state->hearts_at_attach) {
+            LogVerbose("botw: hearts %d trusted", state->hearts);
+            state->hearts_trusted = true;
+            state->last_hearts = state->hearts;
+            in_game_before = false;
+        }
+    }
+
     if (state->hearts != state->last_hearts) {
         // Damage and healing, only once a save is loaded (hearts read 1 on the title screen and while loading)
         s32 before = state->last_hearts;
@@ -541,7 +555,7 @@ bool BotwComputeLightbar(BotwState *state, u8 *r, u8 *g, u8 *b) {
     for (int t = 0; t < BotwSlot_Count; ++t) {
         loaded |= state->equipped[t].present;
     }
-    if (!loaded || armGetSystemTick() < state->settle_until_tick) {
+    if (!loaded || !state->hearts_trusted || armGetSystemTick() < state->settle_until_tick) {
         return false;
     }
 
