@@ -1,4 +1,5 @@
-// Correlation search: finds memory words in a region that change when ZR / ZL is held.
+// Correlation searches: memory words in a region of the player actor that change with ZR / ZL held, while
+// shield surfing, or while a rune is in use.
 #pragma once
 #include <switch.h>
 #include "dmntcht.h"
@@ -6,6 +7,7 @@
 typedef enum {
     SearchMode_Triggers = 1, // words that change while ZR / ZL is held
     SearchMode_Surf     = 2, // bits that are set only while shield surfing (anchored on shield wear events)
+    SearchMode_Rune     = 3, // words that change 1 s after L is pressed (rune in use) compared with standing idle
 } SearchMode;
 
 typedef struct {

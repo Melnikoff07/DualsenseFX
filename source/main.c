@@ -36,7 +36,7 @@ static u32 g_attach_delay_s = 30;
 u32 __nx_applet_type     = AppletType_None;
 u32 __nx_fs_num_sessions = 1;
 
-#define INNER_HEAP_SIZE 0x30000 // search mode allocates ~90 KB for a 16 KB region
+#define INNER_HEAP_SIZE 0x50000 // search modes allocate ~3.5x the region size (up to 32 KB regions)
 
 void __libnx_initheap(void) {
     static u8 inner_heap[INNER_HEAP_SIZE];
@@ -315,12 +315,12 @@ static void LoadConfig(void) {
             g_botw_settings.low_health_quarters = value;
         } else if (sscanf(p, "search = %u", &value) == 1) {
             g_search_settings.enabled = value != 0;
-            if (value == 1 || value == 2) {
+            if (value >= 1 && value <= 3) {
                 g_search_settings.mode = (SearchMode)value;
             }
         } else if (sscanf(p, "search_offset = %x", &value) == 1 && value < 0x100000) {
             g_search_settings.offset = value & ~3u;
-        } else if (sscanf(p, "search_size = %x", &value) == 1 && value >= 0x100 && value <= 0x4000) {
+        } else if (sscanf(p, "search_size = %x", &value) == 1 && value >= 0x100 && value <= 0x8000) {
             g_search_settings.size = value & ~3u;
         } else if (strncmp(p, "watch=", 6) == 0) {
             ParseWatch(p + 6);

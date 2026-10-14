@@ -29,6 +29,20 @@ typedef struct {
 
 Result mcGetAnalogTriggers(McAnalogTriggers *out);
 
+// Buttons (Switch bit layout: Y bit 0, X 1, B 2, A 3, R 6, ZR 7, Minus 8, Plus 9, ... L 22, ZL 23) and triggers
+typedef struct {
+    u32 buttons;
+    u8 left_trigger;
+    u8 right_trigger;
+    u8 valid;
+    u8 reserved;
+} McControllerInput;
+
+#define MC_BUTTON_B (1u << 2)
+#define MC_BUTTON_L (1u << 22)
+
+Result mcGetControllerInput(McControllerInput *out);
+
 typedef struct {
     u32 enabled;
     u32 thread_running;

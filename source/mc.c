@@ -12,6 +12,7 @@ enum {
     McCmd_GetHapticsStatus      = 11,
     McCmd_PlayHaptics           = 12,
     McCmd_StopHaptics           = 13,
+    McCmd_GetControllerInput    = 14,
 };
 
 static Service g_mc;
@@ -59,6 +60,10 @@ Result mcPlayHaptics(const McHapticVoice *voices, u32 count) {
 
 Result mcStopHaptics(void) {
     return serviceDispatch(&g_mc, McCmd_StopHaptics);
+}
+
+Result mcGetControllerInput(McControllerInput *out) {
+    return serviceDispatchOut(&g_mc, McCmd_GetControllerInput, *out);
 }
 
 Result mcGetHapticsStatus(McHapticsStatus *out) {

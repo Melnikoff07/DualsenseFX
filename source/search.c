@@ -15,6 +15,12 @@
 
 void LogLine(const char *fmt, ...);
 
+// Rune mode: the player stands still, presses L once (rune in use: Magnesis / Stasis scope, bomb in hand) and keeps
+// it in use for over a second, then cancels and stands idle for a few seconds. Idle baselines are taken after 1 s
+// with no buttons at all; 1 s after the L press the region is compared with the baseline. Pressing B within that
+// second drops the cycle. Words that differ on every cycle with little noise between baselines are candidates,
+// reported per block of 5 cycles (a block per rune).
+
 // Surf mode: positives are snapshots taken when the shield wears down while surfing, negatives are
 // snapshots from the start of the session, before the first surf (the player runs around without surfing).
 // Surfing starts a few seconds before the first wear event, so negatives are held back in 5 s epochs and
@@ -39,6 +45,7 @@ SearchSettings g_search_settings = {
 #define SURF_EPOCHS      3
 #define SURF_EPOCH_SAMPLES 100  // 5 s at 20 Hz
 #define SURF_NEG_EVERY   10     // one negative snapshot per 0.5 s
+#define RUNE_DELAY_SAMPLES 20   // compare 1 s after the L press
 
 typedef struct {
     const char *name;
@@ -73,6 +80,11 @@ static struct {
     u32 negatives;
     bool surfed;
     u32 followup;                    // samples until an extra positive right after a wear event
+
+    // rune mode
+    bool prev_l;
+    u32 rune_wait;                   // samples left until the post-L comparison
+    u32 rune_blocks;
 } g;
 
 static void ReportSurf(void);
@@ -139,7 +151,7 @@ bool SearchStart(const DmntCheatProcessMetadata *meta) {
     g.noise         = calloc(g.words, 1);
     g.trig[0].hits  = calloc(g.words, 1);
     g.trig[1].hits  = calloc(g.words, 1);
-    g.trig[0].name  = "ZR";
+    g.trig[0].name  = g_search_settings.mode == SearchMode_Rune ? "L" : "ZR";
     g.trig[1].name  = "ZL";
     if (!g.cur || !g.baseline || !g.prev_baseline || !g.noise || !g.trig[0].hits || !g.trig[1].hits) {
         LogLine("search: out of memory for %u bytes", g_search_settings.size);
@@ -148,7 +160,8 @@ bool SearchStart(const DmntCheatProcessMetadata *meta) {
     }
 
     g.active = true;
-    LogLine("search: player actor %010lX, region +%X..+%X", player, g_search_settings.offset, g_search_settings.offset + g_search_settings.size);
+    LogLine("search: %s mode, player actor %010lX, region +%X..+%X", g_search_settings.mode == SearchMode_Rune ? "rune" : "trigger",
+            player, g_search_settings.offset, g_search_settings.offset + g_search_settings.size);
     return true;
 }
 
@@ -256,6 +269,75 @@ static void SearchUpdateSurf(void) {
     }
 }
 
+static void TakeBaseline(void) {
+    if (g.have_baseline) {
+        memcpy(g.prev_baseline, g.baseline, g.words * 4);
+        g.have_prev_baseline = true;
+    }
+    memcpy(g.baseline, g.cur, g.words * 4);
+    g.have_baseline = true;
+    if (g.have_prev_baseline) {
+        ++g.baselines;
+        for (u32 i = 0; i < g.words; ++i) {
+            if (g.baseline[i] != g.prev_baseline[i] && g.noise[i] < 255) {
+                ++g.noise[i];
+            }
+        }
+    }
+}
+
+static void SearchUpdateRune(void) {
+    McControllerInput in;
+    if (R_FAILED(mcGetControllerInput(&in)) || !in.valid) {
+        return;
+    }
+    bool l_down = (in.buttons & MC_BUTTON_L) != 0;
+    bool l_pressed = l_down && !g.prev_l;
+    g.prev_l = l_down;
+    bool any = in.buttons != 0 || in.left_trigger > RELEASED || in.right_trigger > RELEASED;
+
+    SearchTrigger *st = &g.trig[0];
+    if (g.rune_wait > 0) {
+        if (in.buttons & MC_BUTTON_B) {
+            g.rune_wait = 0;
+            LogLine("search: L cycle dropped (B pressed within 1 s)");
+            return;
+        }
+        if (--g.rune_wait > 0 || R_FAILED(dmntchtReadCheatProcessMemory(g.base, g.cur, g.words * 4))) {
+            return;
+        }
+        ++st->cycles;
+        for (u32 i = 0; i < g.words; ++i) {
+            if (g.cur[i] != g.baseline[i] && st->hits[i] < 255) {
+                ++st->hits[i];
+            }
+        }
+        LogLine("search: block %u, L cycle %u", g.rune_blocks + 1, st->cycles);
+        if (st->cycles == REPORT_EVERY) {
+            // Each block of 5 cycles is reported on its own, so one session can cover several runes in turn
+            Report(st);
+            LogLine("search: block %u done", ++g.rune_blocks);
+            memset(st->hits, 0, g.words);
+            st->cycles = 0;
+        }
+        return;
+    }
+
+    if (!any) {
+        if (++g.idle == IDLE_SAMPLES && R_SUCCEEDED(dmntchtReadCheatProcessMemory(g.base, g.cur, g.words * 4))) {
+            TakeBaseline();
+            g.armed[0] = true;
+        }
+        return;
+    }
+    g.idle = 0;
+
+    if (l_pressed && g.armed[0] && g.have_baseline) {
+        g.armed[0] = false;
+        g.rune_wait = RUNE_DELAY_SAMPLES;
+    }
+}
+
 void SearchUpdate(const DmntCheatProcessMetadata *meta) {
     if (!g.active) {
         return;
@@ -282,6 +364,11 @@ void SearchUpdate(const DmntCheatProcessMetadata *meta) {
             }
         }
         SearchUpdateSurf();
+        return;
+    }
+
+    if (g_search_settings.mode == SearchMode_Rune) {
+        SearchUpdateRune();
         return;
     }
 
