@@ -69,6 +69,14 @@ To disable only the module, delete `atmosphere/contents/42000000000d5e00/flags/b
 - While BotW runs the module holds one of the two `dmnt:cht` sessions: Breeze or EdiZon work, but not both at once.
 - Attaches 30 s after launch: attaching earlier conflicts with SaltyNX injection.
 
+## Known issues
+
+- **HD haptics over Bluetooth do not work on the Switch.** The MissionControl fork contains an experimental
+  `dualsense_hd_haptics` option that synthesises the game's HD rumble and streams it to the DualSense voice coils
+  in output report `0x32`. In testing the controller never played the stream, Bluetooth writes started failing
+  with `2113-6100` after about two minutes, and suspending the game froze the console. It is off by default;
+  do not enable it.
+
 ## Credits
 
 - [zeldaret/botw](https://github.com/zeldaret/botw) decompilation.
