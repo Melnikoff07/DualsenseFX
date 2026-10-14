@@ -21,6 +21,9 @@ void LogLine(const char *fmt, ...);
 // second drops the cycle. Words that differ on every cycle with little noise between baselines are candidates,
 // reported per block of 5 cycles (a block per rune).
 
+// Deep rune mode: the same, but over the first 256 bytes of every heap object that the player actor region points to
+// (one level of pointers, collected when the search starts). Candidates are reported as [player+X]+Y.
+
 // Surf mode: positives are snapshots taken when the shield wears down while surfing, negatives are
 // snapshots from the start of the session, before the first surf (the player runs around without surfing).
 // Surfing starts a few seconds before the first wear event, so negatives are held back in 5 s epochs and
@@ -46,6 +49,13 @@ SearchSettings g_search_settings = {
 #define SURF_EPOCH_SAMPLES 100  // 5 s at 20 Hz
 #define SURF_NEG_EVERY   10     // one negative snapshot per 0.5 s
 #define RUNE_DELAY_SAMPLES 20   // compare 1 s after the L press
+#define DEEP_MAX_OBJECTS   512  // deep rune mode: heap objects referenced from the player actor region
+#define DEEP_OBJECT_BYTES  0x100
+#define DEEP_OBJECT_WORDS  (DEEP_OBJECT_BYTES / 4)
+
+static u64 g_deep_addr[DEEP_MAX_OBJECTS];
+static u32 g_deep_src[DEEP_MAX_OBJECTS];    // offset in the player actor where the pointer was found
+static u32 g_deep_count;
 
 typedef struct {
     const char *name;
@@ -123,6 +133,50 @@ bool SearchStart(const DmntCheatProcessMetadata *meta) {
     g.words = g_search_settings.size / 4;
     g.base = player + g_search_settings.offset;
 
+    if (g_search_settings.mode == SearchMode_RuneDeep) {
+        // Collect the distinct heap pointers in the player actor region
+        u64 *region = malloc(g_search_settings.size);
+        if (!region || R_FAILED(dmntchtReadCheatProcessMemory(g.base, region, g_search_settings.size))) {
+            free(region);
+            LogLine("search: player region read failed");
+            return false;
+        }
+        u64 heap_lo = meta->heap_extents.base, heap_hi = meta->heap_extents.base + meta->heap_extents.size;
+        g_deep_count = 0;
+        for (u32 i = 0; i < g_search_settings.size / 8 && g_deep_count < DEEP_MAX_OBJECTS; ++i) {
+            u64 p = region[i];
+            if (p < heap_lo || p >= heap_hi || (p & 7) || (p >= player && p < player + 0x10000)) {
+                continue;
+            }
+            bool seen = false;
+            for (u32 k = 0; k < g_deep_count && !seen; ++k) {
+                seen = g_deep_addr[k] == p;
+            }
+            if (!seen) {
+                g_deep_addr[g_deep_count] = p;
+                g_deep_src[g_deep_count] = g_search_settings.offset + i * 8;
+                ++g_deep_count;
+            }
+        }
+        free(region);
+
+        g.words = g_deep_count * DEEP_OBJECT_WORDS;
+        g.cur          = malloc(g.words * 4);
+        g.baseline     = malloc(g.words * 4);
+        g.noise        = calloc(g.words, 1);
+        g.trig[0].hits = calloc(g.words, 1);
+        g.trig[0].name = "L";
+        if (g.words == 0 || !g.cur || !g.baseline || !g.noise || !g.trig[0].hits) {
+            LogLine("search: deep mode, %u objects, out of memory", g_deep_count);
+            SearchStop();
+            return true;
+        }
+        g.active = true;
+        LogLine("search: deep rune mode, player actor %010lX, %u heap objects referenced from +%X..+%X",
+                player, g_deep_count, g_search_settings.offset, g_search_settings.offset + g_search_settings.size);
+        return true;
+    }
+
     if (g_search_settings.mode == SearchMode_Surf) {
         g.cur     = malloc(g.words * 4);
         g.and_pos = malloc(g.words * 4);
@@ -165,6 +219,32 @@ bool SearchStart(const DmntCheatProcessMetadata *meta) {
     return true;
 }
 
+static bool Snapshot(void) {
+    if (g_search_settings.mode != SearchMode_RuneDeep) {
+        return R_SUCCEEDED(dmntchtReadCheatProcessMemory(g.base, g.cur, g.words * 4));
+    }
+    for (u32 k = 0; k < g_deep_count; ++k) {
+        u32 *dst = &g.cur[k * DEEP_OBJECT_WORDS];
+        if (R_FAILED(dmntchtReadCheatProcessMemory(g_deep_addr[k], dst, DEEP_OBJECT_BYTES))) {
+            memset(dst, 0, DEEP_OBJECT_BYTES);
+        }
+    }
+    return true;
+}
+
+static void LogCandidate(u32 i, u32 noise) {
+    float fi, fh;
+    memcpy(&fi, &g.baseline[i], 4);
+    memcpy(&fh, &g.cur[i], 4);
+    if (g_search_settings.mode == SearchMode_RuneDeep) {
+        u32 k = i / DEEP_OBJECT_WORDS;
+        LogLine("  [player+%X]+%02X  (object %010lX)  idle %08X active %08X  (f %g -> %g)  noise %u",
+                g_deep_src[k], (i % DEEP_OBJECT_WORDS) * 4, g_deep_addr[k], g.baseline[i], g.cur[i], fi, fh, noise);
+    } else {
+        LogLine("  +%05X idle %08X held %08X  (f %g -> %g)  noise %u", g_search_settings.offset + i * 4, g.baseline[i], g.cur[i], fi, fh, noise);
+    }
+}
+
 static void Report(SearchTrigger *t) {
     LogLine("search: %s candidates after %u cycles (%u idle baselines):", t->name, t->cycles, g.baselines);
 
@@ -175,10 +255,7 @@ static void Report(SearchTrigger *t) {
             if (t->hits[i] != t->cycles || g.noise[i] != noise) {
                 continue;
             }
-            float fi, fh;
-            memcpy(&fi, &g.baseline[i], 4);
-            memcpy(&fh, &g.cur[i], 4);
-            LogLine("  +%05X idle %08X held %08X  (f %g -> %g)  noise %u", g_search_settings.offset + i * 4, g.baseline[i], g.cur[i], fi, fh, noise);
+            LogCandidate(i, noise);
             ++shown;
         }
     }
@@ -270,20 +347,17 @@ static void SearchUpdateSurf(void) {
 }
 
 static void TakeBaseline(void) {
+    // Words that differ between two consecutive idle baselines count as noise
     if (g.have_baseline) {
-        memcpy(g.prev_baseline, g.baseline, g.words * 4);
-        g.have_prev_baseline = true;
-    }
-    memcpy(g.baseline, g.cur, g.words * 4);
-    g.have_baseline = true;
-    if (g.have_prev_baseline) {
         ++g.baselines;
         for (u32 i = 0; i < g.words; ++i) {
-            if (g.baseline[i] != g.prev_baseline[i] && g.noise[i] < 255) {
+            if (g.cur[i] != g.baseline[i] && g.noise[i] < 255) {
                 ++g.noise[i];
             }
         }
     }
+    memcpy(g.baseline, g.cur, g.words * 4);
+    g.have_baseline = true;
 }
 
 static void SearchUpdateRune(void) {
@@ -303,7 +377,7 @@ static void SearchUpdateRune(void) {
             LogLine("search: L cycle dropped (B pressed within 1 s)");
             return;
         }
-        if (--g.rune_wait > 0 || R_FAILED(dmntchtReadCheatProcessMemory(g.base, g.cur, g.words * 4))) {
+        if (--g.rune_wait > 0 || !Snapshot()) {
             return;
         }
         ++st->cycles;
@@ -324,7 +398,7 @@ static void SearchUpdateRune(void) {
     }
 
     if (!any) {
-        if (++g.idle == IDLE_SAMPLES && R_SUCCEEDED(dmntchtReadCheatProcessMemory(g.base, g.cur, g.words * 4))) {
+        if (++g.idle == IDLE_SAMPLES && Snapshot()) {
             TakeBaseline();
             g.armed[0] = true;
         }
@@ -367,7 +441,7 @@ void SearchUpdate(const DmntCheatProcessMetadata *meta) {
         return;
     }
 
-    if (g_search_settings.mode == SearchMode_Rune) {
+    if (g_search_settings.mode == SearchMode_Rune || g_search_settings.mode == SearchMode_RuneDeep) {
         SearchUpdateRune();
         return;
     }

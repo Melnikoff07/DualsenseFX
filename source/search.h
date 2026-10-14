@@ -8,6 +8,7 @@ typedef enum {
     SearchMode_Triggers = 1, // words that change while ZR / ZL is held
     SearchMode_Surf     = 2, // bits that are set only while shield surfing (anchored on shield wear events)
     SearchMode_Rune     = 3, // words that change 1 s after L is pressed (rune in use) compared with standing idle
+    SearchMode_RuneDeep = 4, // like 3, in the first 256 bytes of every heap object the player actor region points to
 } SearchMode;
 
 typedef struct {
