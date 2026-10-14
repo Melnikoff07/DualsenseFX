@@ -83,7 +83,9 @@ void __appExit(void) {
 
 // ---- logging ----
 
-void LogLine(const char *fmt, ...) {
+static bool g_verbose = false;
+
+static void LogWrite(const char *fmt, va_list args) {
     FILE *f = fopen(LOG_PATH, "a");
     if (f == NULL) {
         return;
@@ -91,15 +93,29 @@ void LogLine(const char *fmt, ...) {
 
     u64 ms = armTicksToNs(armGetSystemTick()) / 1000000ULL;
     fprintf(f, "[%6lu.%03lu] ", ms / 1000, ms % 1000);
-
-    va_list args;
-    va_start(args, fmt);
     vfprintf(f, fmt, args);
-    va_end(args);
-
     fputc('\n', f);
     fclose(f);
 }
+
+void LogLine(const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    LogWrite(fmt, args);
+    va_end(args);
+}
+
+// Per-event gameplay logging (effect changes, item values...), only with verbose=1 in config.ini
+void LogVerbose(const char *fmt, ...) {
+    if (!g_verbose) {
+        return;
+    }
+    va_list args;
+    va_start(args, fmt);
+    LogWrite(fmt, args);
+    va_end(args);
+}
+
 
 static void StartLog(void) {
     mkdir(LOG_DIR, 0777);
@@ -270,6 +286,8 @@ static void LoadConfig(void) {
         }
         if (sscanf(p, "attach_delay_s = %u", &value) == 1 && value <= 600) {
             g_attach_delay_s = value;
+        } else if (sscanf(p, "verbose = %u", &value) == 1) {
+            g_verbose = value != 0;
         } else if (sscanf(p, "shield_hit_strength = %u", &value) == 1 && value <= 8) {
             g_botw_settings.shield_hit_strength = value;
         } else if (sscanf(p, "shield_hit_ms = %u", &value) == 1 && value <= 2000) {
@@ -305,6 +323,7 @@ static void LoadConfig(void) {
     }
     fclose(f);
 
+    LogLine("config: verbose=%u", g_verbose);
     LogLine("config: attach_delay_s=%u, shield_hit_strength=%u, shield_hit_ms=%u, low_health_quarters=%u, %u watches",
             g_attach_delay_s, g_botw_settings.shield_hit_strength, g_botw_settings.shield_hit_ms, g_botw_settings.low_health_quarters, g_num_watches);
     if (g_search_settings.enabled) {
@@ -492,7 +511,7 @@ static void Update(GameSession *s) {
             (!s->sent_valid || memcmp(&effects, &s->sent, sizeof(effects)) != 0)) {
             Result rc = mcSetTriggerEffects(&effects);
             if (R_SUCCEEDED(rc)) {
-                LogLine("effects R2 mode %02X, L2 mode %02X", effects.right.mode, effects.left.mode);
+                LogVerbose("effects R2 mode %02X, L2 mode %02X", effects.right.mode, effects.left.mode);
                 s->sent = effects;
                 s->sent_valid = true;
             } else {
@@ -507,7 +526,7 @@ static void Update(GameSession *s) {
             if (want && (!s->lightbar_set || memcmp(rgb, s->lightbar, 3) != 0)) {
                 if (R_SUCCEEDED(mcSetLightbarColour(rgb[0], rgb[1], rgb[2]))) {
                     if (!s->lightbar_set) {
-                        LogLine("lightbar: override on (heartbeat or flash)");
+                        LogVerbose("lightbar: override on (heartbeat or flash)");
                     }
                     memcpy(s->lightbar, rgb, 3);
                     s->lightbar_set = true;
@@ -515,7 +534,7 @@ static void Update(GameSession *s) {
             } else if (!want && s->lightbar_set) {
                 mcClearLightbarColour();
                 s->lightbar_set = false;
-                LogLine("lightbar: back to player colour");
+                LogVerbose("lightbar: back to player colour");
             }
         }
 

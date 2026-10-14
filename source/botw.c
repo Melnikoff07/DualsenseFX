@@ -30,6 +30,7 @@
 #include "search.h"
 
 void LogLine(const char *fmt, ...);
+void LogVerbose(const char *fmt, ...);
 
 #define PMDM_INSTANCE_OFFSET   0x2CA6D48
 #define POUCH_BUFFER_OFFSET    0x90
@@ -97,7 +98,7 @@ static void LogHex(const char *label, const u8 *data, size_t size) {
         for (size_t i = 0; i < 16 && off + i < size; ++i) {
             snprintf(&line[i * 3], 4, "%02X ", data[off + i]);
         }
-        LogLine("  %s +%02lX: %s", label, off, line);
+        LogVerbose("  %s +%02lX: %s", label, off, line);
     }
 }
 
@@ -116,7 +117,7 @@ static void Settle(BotwState *state, const char *why) {
     u64 until = armGetSystemTick() + armNsToTicks(SETTLE_NS);
     if (until > state->settle_until_tick) {
         if (armGetSystemTick() >= state->settle_until_tick) {
-            LogLine("botw: effects paused (%s)", why);
+            LogVerbose("botw: effects paused (%s)", why);
         }
         state->settle_until_tick = until;
     }
@@ -156,7 +157,7 @@ static void ScanPouch(BotwState *state) {
 
             BotwEquippedItem *e = &found[type];
             if (e->present) {
-                LogLine("botw: second equipped %s at slot %u", SlotNames[type], first + i);
+                LogVerbose("botw: second equipped %s at slot %u", SlotNames[type], first + i);
                 continue;
             }
             e->present = true;
@@ -166,7 +167,7 @@ static void ScanPouch(BotwState *state) {
 
             if (!state->dumped[type]) {
                 state->dumped[type] = true;
-                LogLine("botw: raw %s item, slot %u:", SlotNames[type], first + i);
+                LogVerbose("botw: raw %s item, slot %u:", SlotNames[type], first + i);
                 LogHex(SlotNames[type], item, ITEM_HEADER_SIZE);
             }
         }
@@ -187,9 +188,9 @@ static void ScanPouch(BotwState *state) {
         BotwEquippedItem *now = &found[t];
         if (old->present != now->present || old->slot != now->slot || strcmp(old->name, now->name) != 0) {
             if (now->present) {
-                LogLine("botw: equipped %-6s slot %3u %-24s value %d (%u items in pouch)", SlotNames[t], now->slot, now->name, now->value, valid_items);
+                LogVerbose("botw: equipped %-6s slot %3u %-24s value %d (%u items in pouch)", SlotNames[t], now->slot, now->name, now->value, valid_items);
             } else {
-                LogLine("botw: equipped %-6s none", SlotNames[t]);
+                LogVerbose("botw: equipped %-6s none", SlotNames[t]);
             }
         }
         *old = *now;
@@ -210,7 +211,7 @@ static void TrackValues(BotwState *state) {
             continue;
         }
 
-        LogLine("botw: %-6s value %d -> %d", SlotNames[t], e->value, value);
+        LogVerbose("botw: %-6s value %d -> %d", SlotNames[t], e->value, value);
 
         // While a save loads every item briefly reads 1
         if (value == 1 && e->value != 2) {
@@ -219,7 +220,7 @@ static void TrackValues(BotwState *state) {
             // Durability went down: the item was used
             if (t == BotwSlot_Shield && !(state->action_flags & ACTION_ZL_STANCE)) {
                 // Shield worn down without guarding: shield surfing. Vibration, the finger is usually just resting on the trigger
-                LogLine("botw: shield wear while surfing");
+                LogVerbose("botw: shield wear while surfing");
                 SetSurfing(state, true, "shield wear");
                 g_search_surf_event = true;
                 if (g_botw_settings.surf_strength > 0) {
@@ -272,7 +273,7 @@ static void SetSurfing(BotwState *state, bool surfing, const char *why) {
         state->surf_until_tick = armGetSystemTick() + armNsToTicks(g_botw_settings.surf_timeout_ms * 1000000ULL);
     }
     if (surfing != state->surfing) {
-        LogLine("botw: surfing %s (%s)", surfing ? "start" : "end", why);
+        LogVerbose("botw: surfing %s (%s)", surfing ? "start" : "end", why);
         state->surfing = surfing;
     }
 }
@@ -285,7 +286,7 @@ static void UpdateActionFlags(BotwState *state) {
 
     // Daruk's Protection blocked a hit: strong push on L2 and an orange flash
     if ((flags & ACTION_DARUK_BLOCK) && !(state->action_flags & ACTION_DARUK_BLOCK)) {
-        LogLine("botw: Daruk's Protection blocked a hit");
+        LogVerbose("botw: Daruk's Protection blocked a hit");
         // Vibration on both triggers: felt whichever trigger the finger is on (often ZR while aiming),
         // a push-back would only be felt on a trigger that is being pressed
         u8 k = g_botw_settings.daruk_strength;
@@ -296,7 +297,7 @@ static void UpdateActionFlags(BotwState *state) {
         state->flash_until_tick = armGetSystemTick() + armNsToTicks(400 * 1000000ULL);
     }
     if ((flags & ACTION_AIRBORNE) != (state->action_flags & ACTION_AIRBORNE)) {
-        LogLine("botw: airborne(?) flag %s", (flags & ACTION_AIRBORNE) ? "on" : "off");
+        LogVerbose("botw: airborne(?) flag %s", (flags & ACTION_AIRBORNE) ? "on" : "off");
     }
 
     // Shield stance dropped straight to nothing: the player got on the shield
@@ -336,7 +337,7 @@ static void UpdatePlayer(BotwState *state, const DmntCheatProcessMetadata *meta)
         menu_open = equipped[0] || equipped[1] || equipped[2] || equipped[3];
     }
     if (menu_open != state->menu_open) {
-        LogLine("botw: pause menu %s", menu_open ? "open" : "closed");
+        LogVerbose("botw: pause menu %s", menu_open ? "open" : "closed");
         state->menu_open = menu_open;
     }
 }
@@ -355,7 +356,7 @@ bool BotwComputeEffects(BotwState *state, TriggerEffects *out) {
     u64 now = armGetSystemTick();
     bool off = state->menu_open || state->hearts <= 0 || now < state->settle_until_tick;
     if (off != state->effects_off_logged) {
-        LogLine("botw: effects %s", off ? "off" : "on");
+        LogVerbose("botw: effects %s", off ? "off" : "on");
         state->effects_off_logged = off;
     }
     if (off) {
