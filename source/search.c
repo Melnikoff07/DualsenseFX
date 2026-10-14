@@ -72,9 +72,16 @@ static struct {
     u32 positives;
     u32 negatives;
     bool surfed;
+    u32 followup;                    // samples until an extra positive right after a wear event
 } g;
 
+static void ReportSurf(void);
+
 void SearchStop(void) {
+    if (g.active && g_search_settings.mode == SearchMode_Surf && g.positives > 0) {
+        LogLine("search: final report");
+        ReportSurf();
+    }
     free(g.cur);
     free(g.baseline);
     free(g.prev_baseline);
@@ -186,6 +193,13 @@ static void SearchUpdateSurf(void) {
     bool event = g_search_surf_event;
     g_search_surf_event = false;
 
+    // One more positive 0.25 s after a wear event, the player is almost certainly still surfing
+    if (event) {
+        g.followup = 5;
+    } else if (g.followup > 0 && --g.followup == 0) {
+        event = true;
+    }
+
     if (event) {
         if (!g.surfed) {
             // The last 10-15 s may already contain surfing: drop the pending epochs
@@ -231,7 +245,7 @@ static void SearchUpdateSurf(void) {
         }
         ++g.positives;
         LogLine("search: surf positive %u (%u negatives)", g.positives, g.negatives);
-        if (g.positives >= 3) {
+        if (g.positives >= 2) {
             ReportSurf();
         }
     } else {
@@ -247,19 +261,28 @@ void SearchUpdate(const DmntCheatProcessMetadata *meta) {
         return;
     }
 
-    if (g_search_settings.mode == SearchMode_Surf) {
-        SearchUpdateSurf();
-        return;
-    }
-
-    // The player actor is recreated on death / save reload: start over on the new one
-    if (++g.samples % 20 == 0) {
+    // The player actor may be recreated on death / save reload: start over on the new one
+    if (g_search_settings.mode != SearchMode_Surf && ++g.samples % 20 == 0) {
         u64 player = BotwGetPlayerActor(meta);
         if (player != 0 && player != g.player) {
             LogLine("search: player actor changed, restarting (stats so far: ZR %u, ZL %u cycles)", g.trig[0].cycles, g.trig[1].cycles);
             SearchStart(meta);
             return;
         }
+    }
+
+    if (g_search_settings.mode == SearchMode_Surf) {
+        static u32 checks;
+        if (++checks % 20 == 0) {
+            u64 player = BotwGetPlayerActor(meta);
+            if (player != 0 && player != g.player) {
+                LogLine("search: player actor changed, restarting surf search (%u positives lost)", g.positives);
+                SearchStart(meta);
+                return;
+            }
+        }
+        SearchUpdateSurf();
+        return;
     }
 
     McAnalogTriggers trig;
