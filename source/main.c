@@ -7,6 +7,7 @@
 #include <switch.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include "dmntcht.h"
@@ -19,8 +20,9 @@
 #define LOG_OLD_PATH LOG_DIR "/log.old.txt"
 #define CONFIG_PATH  LOG_DIR "/config.ini"
 
-#define POLL_INTERVAL_NS     (250 * 1000000ULL)
-#define ATTACH_TIMEOUT_TICKS 120 // 30 s worth of polls
+#define POLL_INTERVAL_NS        (250 * 1000000ULL)
+#define ACTIVE_POLL_INTERVAL_NS (50 * 1000000ULL)  // 20 Hz while attached to the game
+#define ATTACH_TIMEOUT_TICKS    120 // 30 s worth of polls
 
 // Seconds to wait after the game starts before attaching. Other tools (SaltyNX) inject
 // into the game right after launch, attaching dmnt during that seems to crash the game.
@@ -104,6 +106,146 @@ static void StartLog(void) {
     LogLine("adaptive_triggers started");
 }
 
+// ---- watches: pointer chains from config.ini whose values are logged when they change ----
+
+#define MAX_WATCHES       16
+#define MAX_WATCH_OFFSETS 8
+#define LOG_MAX_BYTES     (2 * 1024 * 1024)
+
+typedef enum {
+    WatchType_U8, WatchType_U16, WatchType_U32, WatchType_S32, WatchType_U64, WatchType_F32,
+} WatchType;
+
+typedef enum {
+    WatchBase_Main, WatchBase_Heap,
+} WatchBase;
+
+typedef struct {
+    char name[24];
+    WatchBase base;
+    u32 num_offsets;
+    u64 offsets[MAX_WATCH_OFFSETS]; // first is added to the base, each next one is added after a pointer dereference
+    WatchType type;
+    bool valid;                     // last read succeeded
+    u64 last_raw;
+} Watch;
+
+static Watch g_watches[MAX_WATCHES];
+static u32 g_num_watches;
+
+static const struct { const char *name; WatchType type; u32 size; } WatchTypes[] = {
+    { "u8",  WatchType_U8,  1 }, { "u16", WatchType_U16, 2 }, { "u32", WatchType_U32, 4 },
+    { "s32", WatchType_S32, 4 }, { "u64", WatchType_U64, 8 }, { "f32", WatchType_F32, 4 },
+};
+
+// "watch=name main+2CA6D48 447D8 20 s32": addr = main+2CA6D48, then addr = [addr]+447D8, then addr = [addr]+20, read s32
+// (same semantics as an Atmosphère cheat pointer chain)
+static void ParseWatch(char *spec) {
+    if (g_num_watches >= MAX_WATCHES) {
+        return;
+    }
+
+    Watch w = {0};
+    char *save = NULL;
+    char *tok = strtok_r(spec, " \t\r\n", &save);
+    if (tok == NULL) {
+        return;
+    }
+    snprintf(w.name, sizeof(w.name), "%s", tok);
+
+    bool have_type = false;
+    while ((tok = strtok_r(NULL, " \t\r\n", &save)) != NULL && !have_type) {
+        if (w.num_offsets == 0) {
+            if (strncmp(tok, "main+", 5) == 0)      { w.base = WatchBase_Main; tok += 5; }
+            else if (strncmp(tok, "heap+", 5) == 0) { w.base = WatchBase_Heap; tok += 5; }
+            else { LogLine("watch %s: base must be main+ or heap+", w.name); return; }
+        } else {
+            for (size_t i = 0; i < sizeof(WatchTypes) / sizeof(WatchTypes[0]); ++i) {
+                if (strcmp(tok, WatchTypes[i].name) == 0) {
+                    w.type = WatchTypes[i].type;
+                    have_type = true;
+                }
+            }
+            if (have_type) {
+                break;
+            }
+        }
+        if (w.num_offsets >= MAX_WATCH_OFFSETS) {
+            LogLine("watch %s: too many offsets", w.name);
+            return;
+        }
+        w.offsets[w.num_offsets++] = strtoull(tok, NULL, 16);
+    }
+
+    if (!have_type || w.num_offsets == 0) {
+        LogLine("watch %s: expected \"name main+OFF [OFF...] type\"", w.name);
+        return;
+    }
+
+    g_watches[g_num_watches++] = w;
+}
+
+static Result ResolveWatch(const Watch *w, const DmntCheatProcessMetadata *meta, u64 *out_addr) {
+    u64 addr = (w->base == WatchBase_Main ? meta->main_nso_extents.base : meta->heap_extents.base) + w->offsets[0];
+    for (u32 i = 1; i < w->num_offsets; ++i) {
+        u64 ptr = 0;
+        Result rc = dmntchtReadCheatProcessMemory(addr, &ptr, sizeof(ptr));
+        if (R_FAILED(rc)) {
+            return rc;
+        }
+        if (ptr == 0) {
+            return MAKERESULT(Module_Libnx, LibnxError_NotFound);
+        }
+        addr = ptr + w->offsets[i];
+    }
+    *out_addr = addr;
+    return 0;
+}
+
+static void FormatWatchValue(const Watch *w, u64 raw, char *out, size_t size) {
+    switch (w->type) {
+        case WatchType_S32: snprintf(out, size, "%d", (s32)(u32)raw); break;
+        case WatchType_F32: { float f; u32 v = (u32)raw; memcpy(&f, &v, sizeof(f)); snprintf(out, size, "%.4f", f); break; }
+        case WatchType_U64: snprintf(out, size, "0x%lX", raw); break;
+        default:            snprintf(out, size, "%lu (0x%lX)", raw, raw); break;
+    }
+}
+
+static bool LogTooBig(void) {
+    struct stat st;
+    return stat(LOG_PATH, &st) == 0 && st.st_size > LOG_MAX_BYTES;
+}
+
+static void UpdateWatches(const DmntCheatProcessMetadata *meta) {
+    for (u32 i = 0; i < g_num_watches; ++i) {
+        Watch *w = &g_watches[i];
+
+        u64 addr = 0, raw = 0;
+        Result rc = ResolveWatch(w, meta, &addr);
+        if (R_SUCCEEDED(rc)) {
+            rc = dmntchtReadCheatProcessMemory(addr, &raw, WatchTypes[w->type].size);
+        }
+
+        if (R_FAILED(rc)) {
+            if (w->valid) {
+                LogLine("watch %s: unreadable (0x%X)", w->name, rc);
+                w->valid = false;
+            }
+            continue;
+        }
+
+        if (!w->valid || raw != w->last_raw) {
+            if (!LogTooBig()) {
+                char value[48];
+                FormatWatchValue(w, raw, value, sizeof(value));
+                LogLine("watch %s = %s @%010lX", w->name, value, addr);
+            }
+            w->valid = true;
+            w->last_raw = raw;
+        }
+    }
+}
+
 // ---- config ----
 
 // config.ini, one "key=value" per line, ';' starts a comment
@@ -114,16 +256,38 @@ static void LoadConfig(void) {
         return;
     }
 
-    char line[128];
+    char line[256];
     while (fgets(line, sizeof(line), f)) {
         unsigned value;
-        if (sscanf(line, " attach_delay_s = %u", &value) == 1 && value <= 600) {
+        char *p = line;
+        while (*p == ' ' || *p == '\t') {
+            ++p;
+        }
+        if (*p == ';') {
+            continue;
+        }
+        if (sscanf(p, "attach_delay_s = %u", &value) == 1 && value <= 600) {
             g_attach_delay_s = value;
+        } else if (strncmp(p, "watch=", 6) == 0) {
+            ParseWatch(p + 6);
         }
     }
     fclose(f);
 
-    LogLine("config: attach_delay_s=%u", g_attach_delay_s);
+    LogLine("config: attach_delay_s=%u, %u watches", g_attach_delay_s, g_num_watches);
+    for (u32 i = 0; i < g_num_watches; ++i) {
+        const Watch *w = &g_watches[i];
+        char chain[128] = {0};
+        size_t len = 0;
+        for (u32 j = 0; j < w->num_offsets && len < sizeof(chain); ++j) {
+            if (j == 0) {
+                len += snprintf(chain + len, sizeof(chain) - len, "%s+%lX", w->base == WatchBase_Main ? "main" : "heap", w->offsets[j]);
+            } else {
+                len += snprintf(chain + len, sizeof(chain) - len, " %lX", w->offsets[j]);
+            }
+        }
+        LogLine("  watch %s: %s %s", w->name, chain, WatchTypes[w->type].name);
+    }
 }
 
 // ---- game session ----
@@ -276,7 +440,14 @@ static void Update(GameSession *s) {
         s->state = SessionState_Attaching;
         s->pid = pid;
         s->start_tick = armGetSystemTick();
+        for (u32 i = 0; i < g_num_watches; ++i) {
+            g_watches[i].valid = false;
+        }
         LogLine("waiting %u s before attaching", g_attach_delay_s);
+    }
+
+    if (s->state == SessionState_Active) {
+        UpdateWatches(&s->meta);
     }
 
     if (s->state == SessionState_Attaching) {
@@ -301,7 +472,7 @@ int main(int argc, char **argv) {
     GameSession session = {0};
     while (true) {
         Update(&session);
-        svcSleepThread(POLL_INTERVAL_NS);
+        svcSleepThread(session.state == SessionState_Active ? ACTIVE_POLL_INTERVAL_NS : POLL_INTERVAL_NS);
     }
 
     return 0;
