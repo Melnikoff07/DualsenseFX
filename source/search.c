@@ -132,6 +132,15 @@ bool SearchStart(const DmntCheatProcessMetadata *meta) {
 
     g.words = g_search_settings.size / 4;
     g.base = player + g_search_settings.offset;
+    if (g_search_settings.base_rune) {
+        // RuneMgr instance pointer, main+2C9A668 in 1.6.0 (from the code that spawns remote bombs)
+        u64 rune = 0;
+        if (R_FAILED(dmntchtReadCheatProcessMemory(meta->main_nso_extents.base + 0x2C9A668, &rune, sizeof(rune))) || rune == 0) {
+            return false;
+        }
+        g.base = rune + g_search_settings.offset;
+        LogLine("search: region relative to RuneMgr %010lX", rune);
+    }
 
     if (g_search_settings.mode == SearchMode_RuneDeep) {
         // Collect the distinct heap pointers in the player actor region

@@ -14,7 +14,8 @@ typedef enum {
 typedef struct {
     bool enabled;
     SearchMode mode;
-    u32 offset;     // region start, relative to the player actor
+    bool base_rune; // search_base=rune: the region is relative to the RuneMgr instance instead of the player actor
+    u32 offset;     // region start, relative to the player actor (or RuneMgr)
     u32 size;       // region size in bytes
 } SearchSettings;
 

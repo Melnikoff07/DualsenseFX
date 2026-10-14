@@ -15,6 +15,7 @@
 #include "botw.h"
 #include "haptics.h"
 #include "dump.h"
+#include "net.h"
 #include "search.h"
 
 #define BOTW_PROGRAM_ID 0x01007EF00011E000ULL
@@ -37,7 +38,7 @@ static u32 g_attach_delay_s = 30;
 u32 __nx_applet_type     = AppletType_None;
 u32 __nx_fs_num_sessions = 1;
 
-#define INNER_HEAP_SIZE 0x70000 // search modes allocate up to ~350 KB (32 KB regions, deep rune mode)
+#define INNER_HEAP_SIZE 0xA0000 // search modes up to ~350 KB, network transfer memory ~170 KB
 
 void __libnx_initheap(void) {
     static u8 inner_heap[INNER_HEAP_SIZE];
@@ -308,6 +309,14 @@ static void LoadConfig(void) {
             g_botw_settings.daruk_strength = value;
         } else if (sscanf(p, "bow_release_strength = %u", &value) == 1 && value <= 8) {
             g_botw_settings.bow_release_strength = value;
+        } else if (sscanf(p, "net = %u", &value) == 1) {
+            g_net_settings.enabled = value != 0;
+        } else if (sscanf(p, "net_port = %u", &value) == 1 && value >= 1024 && value < 65535) {
+            g_net_settings.port = value;
+        } else if (strncmp(p, "net_token=", 10) == 0) {
+            char *v = p + 10;
+            v[strcspn(v, "\r\n \t")] = 0;
+            snprintf(g_net_settings.token, sizeof(g_net_settings.token), "%s", v);
         } else if (sscanf(p, "dump_main = %u", &value) == 1) {
             g_dump_main = value != 0;
         } else if (sscanf(p, "haptics = %u", &value) == 1) {
@@ -321,6 +330,8 @@ static void LoadConfig(void) {
             if (value >= 1 && value <= 4) {
                 g_search_settings.mode = (SearchMode)value;
             }
+        } else if (strncmp(p, "search_base=rune", 16) == 0) {
+            g_search_settings.base_rune = true;
         } else if (sscanf(p, "search_offset = %x", &value) == 1 && value < 0x100000) {
             g_search_settings.offset = value & ~3u;
         } else if (sscanf(p, "search_size = %x", &value) == 1 && value >= 0x100 && value <= 0x8000) {
@@ -335,6 +346,7 @@ static void LoadConfig(void) {
     LogLine("config: attach_delay_s=%u, shield_hit_strength=%u, shield_hit_ms=%u, low_health_quarters=%u, %u watches",
             g_attach_delay_s, g_botw_settings.shield_hit_strength, g_botw_settings.shield_hit_ms, g_botw_settings.low_health_quarters, g_num_watches);
     LogLine("config: haptics=%u, haptics_strength=%u", g_haptic_settings.enabled, g_haptic_settings.strength);
+    LogLine("config: net=%u, net_port=%u, token %s", g_net_settings.enabled, g_net_settings.port, g_net_settings.token[0] ? "set" : "empty");
     if (g_search_settings.enabled) {
         LogLine("config: search mode %u, region +%X size %X", g_search_settings.mode, g_search_settings.offset, g_search_settings.size);
     }
@@ -351,6 +363,10 @@ static void LoadConfig(void) {
         }
         LogLine("  watch %s: %s %s", w->name, chain, WatchTypes[w->type].name);
     }
+}
+
+void ReloadConfig(void) {
+    LoadConfig();
 }
 
 // ---- game session ----
@@ -521,8 +537,9 @@ static void Update(GameSession *s) {
 
         // Send effects only when they change, the controller keeps the last ones
         TriggerEffects effects;
-        if (s->mc_open && BotwComputeEffects(&s->botw, &effects) &&
-            (!s->sent_valid || memcmp(&effects, &s->sent, sizeof(effects)) != 0)) {
+        bool have_effects = s->mc_open && BotwComputeEffects(&s->botw, &effects);
+        have_effects |= s->mc_open && NetTriggerOverride(&effects);
+        if (have_effects && (!s->sent_valid || memcmp(&effects, &s->sent, sizeof(effects)) != 0)) {
             Result rc = mcSetTriggerEffects(&effects);
             if (R_SUCCEEDED(rc)) {
                 LogVerbose("effects R2 mode %02X, L2 mode %02X", effects.right.mode, effects.left.mode);
@@ -537,6 +554,7 @@ static void Update(GameSession *s) {
         u8 rgb[3];
         if (s->mc_open) {
             bool want = BotwComputeLightbar(&s->botw, &rgb[0], &rgb[1], &rgb[2]);
+            want |= NetLightbarOverride(&rgb[0], &rgb[1], &rgb[2]);
             if (want && (!s->lightbar_set || memcmp(rgb, s->lightbar, 3) != 0)) {
                 if (R_SUCCEEDED(mcSetLightbarColour(rgb[0], rgb[1], rgb[2]))) {
                     if (!s->lightbar_set) {
@@ -617,16 +635,38 @@ int main(int argc, char **argv) {
 
     GameSession session = {0};
     u64 next_haptics_log = armGetSystemTick() + armNsToTicks(20000000000ULL);
+    u64 next_update = 0;
     while (true) {
-        Update(&session);
+        // Game logic keeps its 20 Hz (4 Hz idle) rhythm; the network is served in between, often while a client is connected
+        u64 now = armGetSystemTick();
+        if (now >= next_update) {
+            Update(&session);
+            next_update = now + armNsToTicks(session.state == SessionState_Active ? ACTIVE_POLL_INTERVAL_NS : POLL_INTERVAL_NS);
 
-        if (armGetSystemTick() >= next_haptics_log) {
-            next_haptics_log = armGetSystemTick() + armNsToTicks(10000000000ULL);
-            if (session.state == SessionState_Idle || session.mc_open) {
-                LogHapticsStatus(session.mc_open);
+            if (armGetSystemTick() >= next_haptics_log) {
+                next_haptics_log = armGetSystemTick() + armNsToTicks(10000000000ULL);
+                if (session.state == SessionState_Idle || session.mc_open) {
+                    LogHapticsStatus(session.mc_open);
+                }
             }
         }
-        svcSleepThread(session.state == SessionState_Active ? ACTIVE_POLL_INTERVAL_NS : POLL_INTERVAL_NS);
+
+        NetContext net = {
+            .attached = session.state == SessionState_Active,
+            .mc_open = session.mc_open,
+            .meta = &session.meta,
+            .botw = &session.botw,
+        };
+        NetUpdate(&net);
+
+        now = armGetSystemTick();
+        u64 sleep_ticks = next_update > now ? next_update - now : 0;
+        if (NetClientConnected() && sleep_ticks > armNsToTicks(5000000ULL)) {
+            sleep_ticks = armNsToTicks(5000000ULL);
+        } else if (g_net_settings.enabled && sleep_ticks > armNsToTicks(50000000ULL)) {
+            sleep_ticks = armNsToTicks(50000000ULL);
+        }
+        svcSleepThread(armTicksToNs(sleep_ticks));
     }
 
     return 0;

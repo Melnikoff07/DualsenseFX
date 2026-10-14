@@ -26,7 +26,12 @@
         "pm:dmnt",
         "pm:info",
         "dmnt:cht",
-        "mc"
+        "mc",
+        "bsd:u",
+        "bsd:s",
+        "nifm:u",
+        "bpc",
+        "bpc:c"
     ],
     "service_host": [],
     "kernel_capabilities": [
