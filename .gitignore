@@ -8,3 +8,4 @@ dist/
 backups/
 *.log
 .DS_Store
+main.bin

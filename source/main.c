@@ -14,6 +14,7 @@
 #include "mc.h"
 #include "botw.h"
 #include "haptics.h"
+#include "dump.h"
 #include "search.h"
 
 #define BOTW_PROGRAM_ID 0x01007EF00011E000ULL
@@ -307,6 +308,8 @@ static void LoadConfig(void) {
             g_botw_settings.daruk_strength = value;
         } else if (sscanf(p, "bow_release_strength = %u", &value) == 1 && value <= 8) {
             g_botw_settings.bow_release_strength = value;
+        } else if (sscanf(p, "dump_main = %u", &value) == 1) {
+            g_dump_main = value != 0;
         } else if (sscanf(p, "haptics = %u", &value) == 1) {
             g_haptic_settings.enabled = value != 0;
         } else if (sscanf(p, "haptics_strength = %u", &value) == 1 && value <= 200) {
@@ -419,6 +422,7 @@ static void CheckMemoryRead(const DmntCheatProcessMetadata *meta) {
 
 static void CloseSession(GameSession *s) {
     SearchStop();
+    DumpStop();
     HapticsSetAvailable(false);
     if (s->mc_open) {
         mcExit();
@@ -458,6 +462,7 @@ static void TryAttach(GameSession *s) {
     LogMetadata(&s->meta);
     CheckMemoryRead(&s->meta);
     BotwInit(&s->botw, &s->meta);
+    DumpStart(&s->meta);
 
     if (R_SUCCEEDED(rc = mcInitialize())) {
         s->mc_open = true;
@@ -511,6 +516,7 @@ static void Update(GameSession *s) {
 
     if (s->state == SessionState_Active) {
         UpdateWatches(&s->meta);
+        DumpUpdate();
         BotwUpdate(&s->botw, &s->meta);
 
         // Send effects only when they change, the controller keeps the last ones

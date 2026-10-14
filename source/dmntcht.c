@@ -27,6 +27,10 @@ Result dmntchtForceOpenCheatProcess(void) {
     return serviceDispatch(&g_dmntcht, 65003);
 }
 
+Result dmntchtQueryCheatProcessMemory(MemoryInfo *out, u64 address) {
+    return serviceDispatchInOut(&g_dmntcht, 65104, address, *out);
+}
+
 Result dmntchtReadCheatProcessMemory(u64 address, void *buffer, size_t size) {
     const struct {
         u64 address;
