@@ -26,6 +26,8 @@ typedef enum {
     HapticPattern_StasisRelease,
     HapticPattern_BombSpawn,
     HapticPattern_BombExplode,
+    HapticPattern_CryonisRise,  // a pillar grows out of the water (~1 s)
+    HapticPattern_CryonisBreak,
     HapticPattern_Count,
 } HapticPattern;
 

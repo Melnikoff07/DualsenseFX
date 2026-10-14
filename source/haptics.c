@@ -116,6 +116,16 @@ static const PatternDef Patterns[HapticPattern_Count] = {
         { NOISE, 255, 255, 300,  80,   0,   1,  60, 450 },
         { NOISE, 150, 150, 120, 120, 120,  30, 100, 600 },  // rumbling debris
     }},
+    [HapticPattern_CryonisRise] = { "cryonis rise", 3, {
+        { NOISE, 112, 112, 120, 200,   0, 300, 600, 200 },  // grinding ice, growing for about a second
+        { 0,      96,  96,  60,  90,   0, 200, 700, 200 },
+        { NOISE, 200, 200, 600, 600,1000,   1,  10,  80 },  // crack when the pillar stands
+    }},
+    [HapticPattern_CryonisBreak] = { "cryonis break", 3, {
+        { NOISE, 230, 230, 700, 200,   0,   1,  30, 200 },  // shatter
+        { 0,     180, 180, 150,  60,   0,   1,  20, 150 },
+        { NOISE, 120, 120, 400, 400,  80,   5,  30, 250 },  // falling shards
+    }},
 };
 
 // Looping textures use fixed slots, one-shot patterns take the remaining slots in turn so that quick events in a row
@@ -135,8 +145,8 @@ static const LoopDef Loops[HapticLoop_Count] = {
         { NOISE | LOOP, 75, 75, 110, 110,   0,  150, 0, 0 },  // gravel under the shield
     }},
     [HapticLoop_Magnesis] = { 2, { 3, 4 }, {
-        { LOOP,         80, 80,  55,  60,   0,  300, 0, 0 },  // magnetic hum
-        { NOISE | LOOP, 45, 45,  90,  90,   0,  300, 0, 0 },
+        { LOOP,         36, 36,  55,  60,   0,  300, 0, 0 },  // magnetic hum (tuned down with the user)
+        { NOISE | LOOP, 20, 20,  90,  90,   0,  300, 0, 0 },
     }},
 };
 

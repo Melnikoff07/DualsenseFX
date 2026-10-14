@@ -33,6 +33,8 @@
 //   +410 aimed rune locked on a target (pointer, 0 when not)
 //   +2B0 + i*0x28 bomb slots (round, cube): +20 state 0 none, 3 out, 0xE exploding
 //   +488 Stasis: 0x10000 while a target is frozen, 0x100 flashes with the frozen target (faster towards the end)
+//   +94  one-frame events: 0x21 rune raised, 0x20 rune put away; with Cryonis 0x4 = a pillar was made (+168 reads 1
+//        in the same frame) or broken (+168 stays 0). Recorded at ~58 Hz, each lasts one game frame.
 // Magnesis holding an object: the player's current tool name at player +D44 reads "Item_Magnetglove" (the rune
 // flags drop the aim bit while holding).
 #include <stdio.h>
@@ -75,6 +77,11 @@ void LogVerbose(const char *fmt, ...);
 #define RUNE_FLAGS             0x90
 #define RUNE_FLAG_AIM          0x10
 #define RUNE_TARGET            0x410
+#define RUNE_SELECTED          0x240
+#define RUNE_CRYONIS           4
+#define RUNE_EVENTS            0x94
+#define RUNE_EVENT_CRYONIS     0x4
+#define RUNE_CRYONIS_MADE      0x168
 #define RUNE_BOMB_STATE        0x2D0    // + slot * 0x28
 #define RUNE_BOMB_STRIDE       0x28
 #define RUNE_BOMB_EXPLODING    0xE
@@ -542,12 +549,34 @@ static void UpdateRunes(BotwState *state, const DmntCheatProcessMetadata *meta) 
     }
 
     state->runes_read = true;
+    state->rune_mgr = mgr;
+    state->rune_selected = Field32(fields, RUNE_SELECTED);
     state->rune_flags = flags;
     state->rune_target = target;
     state->bomb_state[0] = bombs[0];
     state->bomb_state[1] = bombs[1];
     state->stasis_flags = stasis;
     state->magnesis_held = held;
+}
+
+void BotwPollFast(BotwState *state) {
+    if (!state->supported || !state->runes_read || state->rune_selected != RUNE_CRYONIS) {
+        state->cryonis_event = false;
+        return;
+    }
+    u8 buf[RUNE_CRYONIS_MADE + 4 - RUNE_EVENTS];
+    if (R_FAILED(dmntchtReadCheatProcessMemory(state->rune_mgr + RUNE_EVENTS, buf, sizeof(buf)))) {
+        return;
+    }
+    u32 events, made;
+    memcpy(&events, buf, sizeof(events));
+    memcpy(&made, buf + RUNE_CRYONIS_MADE - RUNE_EVENTS, sizeof(made));
+    bool event = events & RUNE_EVENT_CRYONIS;
+    if (event && !state->cryonis_event && InGame(state) && !state->menu_open) {
+        LogVerbose("botw: cryonis %s", made == 1 ? "pillar made" : "pillar broken");
+        HapticsPlay(made == 1 ? HapticPattern_CryonisRise : HapticPattern_CryonisBreak, 1.0f);
+    }
+    state->cryonis_event = event;
 }
 
 bool BotwComputeEffects(BotwState *state, TriggerEffects *out) {

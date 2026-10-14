@@ -56,6 +56,9 @@ typedef struct {
     u32 bomb_state[2];
     u32 stasis_flags;
     bool magnesis_held;
+    u64 rune_mgr;
+    u32 rune_selected;
+    bool cryonis_event;     // event bit seen on the last fast poll
 } BotwState;
 
 // Tunables from config.ini
@@ -76,6 +79,9 @@ extern BotwSettings g_botw_settings;
 
 void BotwInit(BotwState *state, const DmntCheatProcessMetadata *meta);
 void BotwUpdate(BotwState *state, const DmntCheatProcessMetadata *meta);
+
+// Called as often as possible (~100 Hz): one-frame rune events that the 20 Hz update would miss (Cryonis)
+void BotwPollFast(BotwState *state);
 
 // Trigger effects for the current game state. Returns false if the build is not supported.
 bool BotwComputeEffects(BotwState *state, TriggerEffects *out);

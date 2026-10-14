@@ -27,6 +27,7 @@
 
 #define POLL_INTERVAL_NS        (250 * 1000000ULL)
 #define ACTIVE_POLL_INTERVAL_NS (50 * 1000000ULL)  // 20 Hz while attached to the game
+#define FAST_POLL_INTERVAL_NS   (10 * 1000000ULL)  // one-frame events (BotwPollFast)
 #define ATTACH_TIMEOUT_TICKS    120 // 30 s worth of polls
 
 // Seconds to wait after the game starts before attaching. Other tools (SaltyNX) inject
@@ -658,9 +659,15 @@ int main(int argc, char **argv) {
             .botw = &session.botw,
         };
         NetUpdate(&net);
+        if (session.state == SessionState_Active) {
+            BotwPollFast(&session.botw);
+        }
 
         now = armGetSystemTick();
         u64 sleep_ticks = next_update > now ? next_update - now : 0;
+        if (session.state == SessionState_Active && sleep_ticks > armNsToTicks(FAST_POLL_INTERVAL_NS)) {
+            sleep_ticks = armNsToTicks(FAST_POLL_INTERVAL_NS);
+        }
         if (NetClientConnected() && sleep_ticks > armNsToTicks(5000000ULL)) {
             sleep_ticks = armNsToTicks(5000000ULL);
         } else if (g_net_settings.enabled && sleep_ticks > armNsToTicks(50000000ULL)) {
