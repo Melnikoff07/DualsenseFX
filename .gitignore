@@ -5,3 +5,6 @@ dist/
 *.npdm
 *.nsp
 *.map
+backups/
+*.log
+.DS_Store

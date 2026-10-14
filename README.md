@@ -7,8 +7,21 @@ Two parts:
 
 | Part | Location on the SD card | What it does |
 |---|---|---|
-| MissionControl fork (branch `dualsense-triggers`) | `atmosphere/contents/010000000000bd00` | DualSense driver; extra `mc` service commands: 6/7 trigger effects, 8 analog trigger state, 9/10 lightbar colour, 11 HD haptics status. Overrides are cleared automatically when the client session closes |
+| [MissionControl fork](MissionControl) (submodule, branch `dualsense-triggers`) | `atmosphere/contents/010000000000bd00` | DualSense driver; extra `mc` service commands: 6/7 trigger effects, 8 analog trigger state, 9/10 lightbar colour, 11 HD haptics status. Overrides are cleared automatically when the client session closes |
 | `adaptive_triggers` sysmodule | `atmosphere/contents/42000000000d5e00` | detects BotW, reads game state through `dmnt:cht` and sends effects to MissionControl |
+
+## Requirements
+
+- A Switch running Atmosphère (tested: firmware 22.5.0, Atmosphère 1.12.0, emuMMC).
+- A Sony DualSense paired through MissionControl. The fork replaces the stock MissionControl 0.16.0.
+- Breath of the Wild **1.6.0** (other versions are ignored by the module).
+
+Use it offline on emuMMC. It reads game memory through Atmosphère's cheat service the same way Breeze/EdiZon do.
+
+## Quick install
+
+Download the zip from the latest [release](../../releases), back up your `atmosphere/contents/010000000000bd00`,
+and extract the zip to the root of the SD card. Reboot. Settings are in `config/adaptive_triggers/config.ini`.
 
 ## Effects
 
@@ -44,24 +57,38 @@ build ID, the module's correlation search and watch logs.
 
 ## Building
 
-Toolchain in the Lima VM `mcbuild` with the Docker image `mc-devkit:libnx-feebd02` (devkitPro + libnx from the
-MissionControl submodule).
+Clone with submodules (the MissionControl fork and its own `libnx` / `Atmosphere-libs` submodules):
 
 ```
-tools/dk 'cd MissionControl && make dist -j8'
-tools/dk 'cd adaptive_triggers && make -j8 dist'
+git clone --recurse-submodules https://github.com/__OWNER__/botw-dualsense-triggers.git
+cd botw-dualsense-triggers
 ```
+
+Build the toolchain image once (devkitPro devkitA64 + the libnx revision MissionControl expects), then build both parts:
+
+```
+docker build -t mc-devkit -f tools/Dockerfile MissionControl/lib/libnx
+tools/dk 'cd MissionControl && make dist -j8'
+tools/dk 'make -j8 dist'
+```
+
+`tools/dk` runs the command in that image with the repository mounted at `/work`. Without a local Docker it uses
+a [Lima](https://lima-vm.io) VM (`LIMA_INSTANCE`, default `mcbuild`, created from `template:docker`) that mounts
+the repository at `/work` — mount it at a path without spaces, the devkitPro makefiles do not handle them.
 
 ## Install and roll back
 
-With the SD card mounted on a Mac (`/Volumes/NS_SAMSUNG`):
+**Back up your current `atmosphere/contents/010000000000bd00` first** (for example into `backups/MissionControl-original/`).
+
+With the SD card mounted (`SD=/Volumes/NS_SAMSUNG` by default):
 
 ```
-tools/deploy.sh             # MissionControl + adaptive_triggers + config.ini
-tools/deploy.sh --rollback  # original MissionControl 0.16.0, adaptive_triggers removed
+tools/deploy.sh             # MissionControl fork + adaptive_triggers + config.ini
+tools/deploy.sh --rollback  # restore the backed up MissionControl, remove adaptive_triggers
 ```
 
-To disable only the module, delete `atmosphere/contents/42000000000d5e00/flags/boot2.flag`.
+To disable only the module, delete `atmosphere/contents/42000000000d5e00/flags/boot2.flag`, or toggle it in an
+overlay sysmodule manager (the module ships a `toolbox.json`).
 
 ## Limitations
 

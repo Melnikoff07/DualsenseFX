@@ -1,0 +1,19 @@
+#!/bin/bash
+# Run a command inside the toolchain container with the repository mounted at /work.
+#   tools/dk 'cd MissionControl && make dist -j8'
+#   tools/dk 'make -j8 dist'
+# Uses docker when available. Otherwise a Lima VM (LIMA_INSTANCE, default "mcbuild") with docker inside,
+# which must mount this repository at /work (paths with spaces break the devkitPro makefiles).
+set -e
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+IMAGE="${DK_IMAGE:-mc-devkit}"
+CMD='git config --global --add safe.directory "*"; '"$*"
+
+if command -v docker >/dev/null 2>&1; then
+    exec docker run --rm -v "$ROOT":/work -w /work "$IMAGE" bash -c "$CMD"
+fi
+
+LIMACTL="${LIMACTL:-$(command -v limactl || echo "$HOME/.local/lima/bin/limactl")}"
+INSTANCE="${LIMA_INSTANCE:-mcbuild}"
+"$LIMACTL" list "$INSTANCE" --format '{{.Status}}' | grep -q Running || "$LIMACTL" start --tty=false "$INSTANCE" >/dev/null
+exec "$LIMACTL" shell --workdir /work "$INSTANCE" -- docker run --rm -v /work:/work -w /work "$IMAGE" bash -c "$CMD"
