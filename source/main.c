@@ -572,9 +572,12 @@ static void LogHapticsStatus(bool mc_open) {
     }
 
     if (!have_last || st.enabled != last.enabled || st.thread_running != last.thread_running ||
-        st.reports_sent != last.reports_sent || st.reports_failed != last.reports_failed) {
-        LogLine("haptics: enabled %u, thread %u, ticks %u, sent %u, failed %u, last error 0x%X",
-                st.enabled, st.thread_running, st.ticks, st.reports_sent, st.reports_failed, st.last_error);
+        st.reports_sent != last.reports_sent || st.reports_failed != last.reports_failed ||
+        st.chirps != last.chirps || st.fallbacks != last.fallbacks) {
+        LogLine("haptics: enabled %u, thread %u, ticks %u, sent %u, failed %u, last error 0x%X, "
+                "prime failed 0x%X, chirps %u, fallbacks %u",
+                st.enabled, st.thread_running, st.ticks, st.reports_sent, st.reports_failed, st.last_error,
+                st.prime_failed, st.chirps, st.fallbacks);
         last = st;
         have_last = true;
     }

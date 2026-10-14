@@ -36,6 +36,9 @@ typedef struct {
     u32 reports_sent;
     u32 reports_failed;
     u32 last_error;
+    u32 prime_failed;   // feature reads 0x09/0x22 that failed at connect (bit 0 = 0x09, bit 1 = 0x22)
+    u32 chirps;         // startup test buzzes
+    u32 fallbacks;      // controllers that fell back to the simplified rumble
 } McHapticsStatus;
 
 Result mcGetHapticsStatus(McHapticsStatus *out);
