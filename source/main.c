@@ -288,6 +288,9 @@ static void LoadConfig(void) {
             g_botw_settings.low_health_quarters = value;
         } else if (sscanf(p, "search = %u", &value) == 1) {
             g_search_settings.enabled = value != 0;
+            if (value == 1 || value == 2) {
+                g_search_settings.mode = (SearchMode)value;
+            }
         } else if (sscanf(p, "search_offset = %x", &value) == 1 && value < 0x100000) {
             g_search_settings.offset = value & ~3u;
         } else if (sscanf(p, "search_size = %x", &value) == 1 && value >= 0x100 && value <= 0x4000) {
@@ -301,7 +304,7 @@ static void LoadConfig(void) {
     LogLine("config: attach_delay_s=%u, shield_hit_strength=%u, shield_hit_ms=%u, low_health_quarters=%u, %u watches",
             g_attach_delay_s, g_botw_settings.shield_hit_strength, g_botw_settings.shield_hit_ms, g_botw_settings.low_health_quarters, g_num_watches);
     if (g_search_settings.enabled) {
-        LogLine("config: search on, region +%X size %X", g_search_settings.offset, g_search_settings.size);
+        LogLine("config: search mode %u, region +%X size %X", g_search_settings.mode, g_search_settings.offset, g_search_settings.size);
     }
     for (u32 i = 0; i < g_num_watches; ++i) {
         const Watch *w = &g_watches[i];

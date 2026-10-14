@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "botw.h"
+#include "search.h"
 
 void LogLine(const char *fmt, ...);
 
@@ -57,9 +58,9 @@ void LogLine(const char *fmt, ...);
 #define SCAN_CHUNK_ITEMS       12
 
 BotwSettings g_botw_settings = {
-    .shield_hit_strength = 6,
-    .shield_hit_style = 1,
-    .shield_hit_ms = 200,
+    .shield_hit_strength = 2,
+    .shield_hit_style = 2,
+    .shield_hit_ms = 150,
     .low_health_quarters = 4,
     .bow_release_strength = 0,
     .bow_drawn_strength = 8,
@@ -212,6 +213,7 @@ static void TrackValues(BotwState *state) {
             if (t == BotwSlot_Shield && !(state->action_flags & ACTION_ZL_STANCE)) {
                 // Shield worn down without guarding: shield surfing. Vibration, the finger is usually just resting on the trigger
                 LogLine("botw: shield wear while surfing");
+                g_search_surf_event = true;
                 if (g_botw_settings.surf_strength > 0) {
                     Pulse(state, 0, TriggerEffectVibration(0, g_botw_settings.surf_strength, 30), 250 * 1000000ULL);
                     Pulse(state, 1, TriggerEffectVibration(0, g_botw_settings.surf_strength, 30), 250 * 1000000ULL);
