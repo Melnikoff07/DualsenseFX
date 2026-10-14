@@ -44,6 +44,7 @@ dist: all
 	@mkdir -p dist/atmosphere/contents/$(PROGRAM_ID)/flags dist/config/adaptive_triggers
 	@cp $(TARGET).nsp dist/atmosphere/contents/$(PROGRAM_ID)/exefs.nsp
 	@touch dist/atmosphere/contents/$(PROGRAM_ID)/flags/boot2.flag
+	@cp toolbox.json dist/atmosphere/contents/$(PROGRAM_ID)/toolbox.json
 	@echo "dist ready"
 
 clean:
