@@ -33,6 +33,8 @@ typedef struct {
     u64 bow_active_until_tick; // keep light bow tension shortly after a shot, for rapid fire
     u32 action_flags;       // player +C40
     u64 flash_until_tick;   // lightbar flash (Daruk's Protection)
+    bool surfing;
+    u64 surf_until_tick;    // surfing ends at this point unless the shield wears down again
     u64 hearts_changed_tick;
     bool menu_open;         // pause menu open (mEquippedWeapons is only filled then)
     u64 settle_until_tick;  // effects stay off until then (death, save reload)
@@ -50,6 +52,8 @@ typedef struct {
     u8 bow_release_strength; // 0-8, pulse on R2 when an arrow is shot, 0 disables (not felt: the finger is already off the trigger)
     u8 bow_drawn_strength;   // 1-8, R2 resistance once the bow is drawn (bow state 2)
     u8 surf_strength;        // 0-8, vibration on both triggers when the shield wears down while surfing, 0 disables
+    u8 surf_rumble_strength; // 0-8, continuous light vibration on both triggers while surfing, 0 disables
+    u32 surf_timeout_ms;     // surfing ends after this long without shield wear
     u8 daruk_strength;       // 0-8, vibration on both triggers when Daruk's Protection blocks a hit, 0 disables (lightbar flash stays)
 } BotwSettings;
 

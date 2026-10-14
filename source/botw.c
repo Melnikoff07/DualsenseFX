@@ -21,6 +21,9 @@
 //   0x2 for 0.2-4.5 s stretches: NOT shield surfing (stays off while surfing), probably jumping / airborne.
 // Shield surfing has no known flag yet, but it wears the shield down every few seconds while
 // there is no ZL stance, whereas a blocked hit always happens in the ZL stance.
+// Getting on the shield drops the ZL stance straight to nothing (0x18/0x98 -> 0), while lowering the
+// shield normally goes through 0x88/0x80 (seen on all 5 surf starts in one session). Surfing ends on a
+// jump / fall (0x2), shield raised, bow drawn, or after surf_timeout_ms without shield wear.
 #include <stdio.h>
 #include <string.h>
 #include "botw.h"
@@ -66,6 +69,8 @@ BotwSettings g_botw_settings = {
     .bow_drawn_strength = 8,
     .daruk_strength = 5,
     .surf_strength = 3,
+    .surf_rumble_strength = 2,
+    .surf_timeout_ms = 6000,
 };
 
 static const u8 SupportedBuildId[8] = { 0x8E, 0x99, 0x78, 0xD5, 0x0B, 0xDD, 0x20, 0xB4 };
@@ -121,6 +126,8 @@ static void Pulse(BotwState *state, int trigger, TriggerEffect effect, u64 durat
     state->pulse_effect[trigger] = effect;
     state->pulse_until_tick[trigger] = armGetSystemTick() + armNsToTicks(duration_ns);
 }
+
+static void SetSurfing(BotwState *state, bool surfing, const char *why);
 
 static void ScanPouch(BotwState *state) {
     BotwEquippedItem found[BotwSlot_Count] = {0};
@@ -213,6 +220,7 @@ static void TrackValues(BotwState *state) {
             if (t == BotwSlot_Shield && !(state->action_flags & ACTION_ZL_STANCE)) {
                 // Shield worn down without guarding: shield surfing. Vibration, the finger is usually just resting on the trigger
                 LogLine("botw: shield wear while surfing");
+                SetSurfing(state, true, "shield wear");
                 g_search_surf_event = true;
                 if (g_botw_settings.surf_strength > 0) {
                     Pulse(state, 0, TriggerEffectVibration(0, g_botw_settings.surf_strength, 30), 250 * 1000000ULL);
@@ -259,6 +267,16 @@ static void UpdateBow(BotwState *state) {
     state->bow_state = bow_state;
 }
 
+static void SetSurfing(BotwState *state, bool surfing, const char *why) {
+    if (surfing) {
+        state->surf_until_tick = armGetSystemTick() + armNsToTicks(g_botw_settings.surf_timeout_ms * 1000000ULL);
+    }
+    if (surfing != state->surfing) {
+        LogLine("botw: surfing %s (%s)", surfing ? "start" : "end", why);
+        state->surfing = surfing;
+    }
+}
+
 static void UpdateActionFlags(BotwState *state) {
     u32 flags = 0;
     if (state->player == 0 || R_FAILED(dmntchtReadCheatProcessMemory(state->player + PLAYER_ACTION_FLAGS, &flags, sizeof(flags)))) {
@@ -279,6 +297,18 @@ static void UpdateActionFlags(BotwState *state) {
     }
     if ((flags & ACTION_AIRBORNE) != (state->action_flags & ACTION_AIRBORNE)) {
         LogLine("botw: airborne(?) flag %s", (flags & ACTION_AIRBORNE) ? "on" : "off");
+    }
+
+    // Shield stance dropped straight to nothing: the player got on the shield
+    const u32 stance_bits = ACTION_ZL_STANCE | 0x80;
+    if ((state->action_flags & ACTION_ZL_STANCE) && !(flags & stance_bits) && state->equipped[BotwSlot_Shield].present) {
+        SetSurfing(state, true, "stance dropped without lowering the shield");
+    } else if (state->surfing) {
+        if (flags & ACTION_AIRBORNE) {
+            SetSurfing(state, false, "jump / fall");
+        } else if (flags & stance_bits) {
+            SetSurfing(state, false, "shield raised");
+        }
     }
     state->action_flags = flags;
 }
@@ -358,6 +388,15 @@ bool BotwComputeEffects(BotwState *state, TriggerEffects *out) {
     bool one_handed = !sword->present || strncmp(sword->name, "Weapon_Sword_", 13) == 0;
     if (shield->present && shield->value > 0 && one_handed) {
         out->left = IsLow(shield) ? TriggerEffectVibration(2, 3, 20) : TriggerEffectFeedback(ShieldGuard);
+    }
+
+    // Surfing: continuous light gravel-like rumble on both triggers
+    if (state->surfing && (now >= state->surf_until_tick || state->bow_state != 0 || !shield->present)) {
+        SetSurfing(state, false, now >= state->surf_until_tick ? "no shield wear for a while" : "bow or no shield");
+    }
+    if (state->surfing && g_botw_settings.surf_rumble_strength > 0) {
+        out->right = TriggerEffectVibration(0, g_botw_settings.surf_rumble_strength, 50);
+        out->left  = TriggerEffectVibration(0, g_botw_settings.surf_rumble_strength, 50);
     }
 
     // Short event effects override the profile
