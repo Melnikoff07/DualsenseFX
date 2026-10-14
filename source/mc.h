@@ -39,6 +39,10 @@ typedef struct {
     u32 prime_failed;   // feature reads 0x09/0x22 that failed at connect (bit 0 = 0x09, bit 1 = 0x22)
     u32 chirps;         // startup test buzzes
     u32 fallbacks;      // controllers that fell back to the simplified rumble
+    u32 input_reports;  // 0x31 input reports in haptics mode
+    u32 input_mic;      // of those, microphone audio reports (skipped)
+    u32 input_other;    // input reports with other ids
+    u8  last_input[8];  // first bytes of the last 0x31 input report
 } McHapticsStatus;
 
 Result mcGetHapticsStatus(McHapticsStatus *out);
