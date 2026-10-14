@@ -47,6 +47,15 @@ typedef struct {
     u64 airborne_since_tick;
     u64 break_tick;         // last weapon break pattern, to play it once
     u64 heartbeat_second;   // last second a felt heartbeat was played
+
+    // Runes (RuneMgr, see botw.c)
+    bool runes_read;        // the values below are from a previous poll
+    u32 rune_flags;
+    u64 rune_target;
+    u64 rune_lock_tick;     // last lock click, the target flickers at the edge of the aim
+    u32 bomb_state[2];
+    u32 stasis_flags;
+    bool magnesis_held;
 } BotwState;
 
 // Tunables from config.ini

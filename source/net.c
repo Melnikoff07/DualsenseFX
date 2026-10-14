@@ -26,6 +26,9 @@ NetSettings g_net_settings = { .enabled = false, .token = "", .port = 7330 };
 #define READ_MAX          0x100000
 #define CHUNK             0x8000
 #define IO_TIMEOUT_S      5
+#define PAUSE_RESET_MS    5000    // main loop stalled this long: the console slept, sockets are dead
+#define LISTEN_REFRESH_MS 30000   // sleep can kill the listener without any error, so reopen it while idle
+#define CLIENT_IDLE_MS    120000
 
 static const char *AllowedDirs[] = {
     "sdmc:/config/adaptive_triggers/",
@@ -53,6 +56,10 @@ static bool g_authed;
 static u64 g_retry_tick;
 static u32 g_ip;
 static u64 g_ip_check_tick;
+static u64 g_last_update;
+static u64 g_listen_refresh_tick;
+static int g_listen_failures;
+static u64 g_client_seen;
 static char g_line[1024];
 static size_t g_line_len;
 static u8 g_buf[CHUNK];
@@ -112,10 +119,19 @@ static void Disconnect(const char *why) {
     g_line_len = 0;
 }
 
+// Waits until the client socket is ready, so a full send buffer or a slow sender doesn't drop the connection
+static bool WaitReady(short events) {
+    struct pollfd pfd = { .fd = g_client, .events = events };
+    return poll(&pfd, 1, IO_TIMEOUT_S * 1000) > 0 && !(pfd.revents & (POLLERR | POLLHUP | POLLNVAL));
+}
+
 static bool SendAll(const void *data, size_t size) {
     const u8 *p = data;
     while (size > 0) {
         ssize_t n = send(g_client, p, size, 0);
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) && WaitReady(POLLOUT)) {
+            continue;
+        }
         if (n <= 0) {
             return false;
         }
@@ -145,6 +161,9 @@ static bool RecvExact(void *data, size_t size) {
     u8 *p = data;
     while (size > 0) {
         ssize_t n = recv(g_client, p, size, 0);
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) && WaitReady(POLLIN)) {
+            continue;
+        }
         if (n <= 0) {
             return false;
         }
@@ -614,7 +633,26 @@ static void HandleLine(const NetContext *ctx, char *line) {
 
 // ---- server ----
 
-static void OpenListeners(void) {
+static void CloseListeners(void) {
+    CloseFd(&g_listen);
+    CloseFd(&g_udp);
+}
+
+// Drop everything and start the socket service again a moment later
+static void ResetSockets(const char *why) {
+    LogLine("net: restarting network (%s)", why);
+    Disconnect(why);
+    CloseListeners();
+    if (g_socket_ready) {
+        socketExit();
+        g_socket_ready = false;
+    }
+    g_listen_failures = 0;
+    g_ip = 0;
+    g_retry_tick = armGetSystemTick() + Ms(2000);
+}
+
+static void OpenListeners(bool quiet) {
     struct sockaddr_in addr = { .sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_ANY) };
     int yes = 1;
 
@@ -624,8 +662,11 @@ static void OpenListeners(void) {
         bind(g_listen, (struct sockaddr *)&addr, sizeof(addr)) < 0 || listen(g_listen, 1) < 0) {
         LogLine("net: TCP listen on %u failed (errno %d)", g_net_settings.port, errno);
         CloseFd(&g_listen);
+        g_listen_failures++;
         return;
     }
+    g_listen_failures = 0;
+    g_listen_refresh_tick = armGetSystemTick() + Ms(LISTEN_REFRESH_MS);
     fcntl(g_listen, F_SETFL, O_NONBLOCK);
 
     g_udp = socket(AF_INET, SOCK_DGRAM, 0);
@@ -636,7 +677,9 @@ static void OpenListeners(void) {
     } else {
         fcntl(g_udp, F_SETFL, O_NONBLOCK);
     }
-    LogLine("net: listening on TCP %u (discovery UDP %u)", g_net_settings.port, g_net_settings.port + 1);
+    if (!quiet) {
+        LogLine("net: listening on TCP %u (discovery UDP %u)", g_net_settings.port, g_net_settings.port + 1);
+    }
 }
 
 static void Discovery(void) {
@@ -662,16 +705,18 @@ static void Accept(void) {
     if (fd < 0) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
             LogLine("net: accept failed (errno %d), reopening", errno);
-            CloseFd(&g_listen);
-            CloseFd(&g_udp);
+            CloseListeners();
             g_retry_tick = armGetSystemTick() + Ms(3000);
         }
         return;
     }
+    // The listener is non-blocking and accepted sockets inherit that: large replies and uploads failed half way
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) & ~O_NONBLOCK);
     struct timeval tv = { .tv_sec = IO_TIMEOUT_S };
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     g_client = fd;
+    g_client_seen = armGetSystemTick();
     g_authed = false;
     g_line_len = 0;
     LogLine("net: client %s connected", inet_ntoa(from.sin_addr));
@@ -690,6 +735,7 @@ static void ReadClient(const NetContext *ctx) {
             Disconnect("connection closed");
             return;
         }
+        g_client_seen = armGetSystemTick();
         if (c == '\r') {
             continue;
         }
@@ -709,12 +755,15 @@ void NetUpdate(const NetContext *ctx) {
     if (!g_net_settings.enabled) {
         if (g_client >= 0 || g_listen >= 0) {
             Disconnect("net disabled");
-            CloseFd(&g_listen);
-            CloseFd(&g_udp);
+            CloseListeners();
         }
         return;
     }
     u64 now = armGetSystemTick();
+    if (g_last_update != 0 && now - g_last_update > Ms(PAUSE_RESET_MS) && g_socket_ready) {
+        ResetSockets("woke up after a pause");
+    }
+    g_last_update = now;
 
     if (!g_socket_ready) {
         if (now < g_retry_tick) {
@@ -738,11 +787,27 @@ void NetUpdate(const NetContext *ctx) {
         if (now < g_retry_tick) {
             return;
         }
-        OpenListeners();
+        OpenListeners(false);
         if (g_listen < 0) {
-            g_retry_tick = now + Ms(5000);
+            if (g_listen_failures >= 2) {
+                ResetSockets("cannot listen");
+            } else {
+                g_retry_tick = now + Ms(5000);
+            }
             return;
         }
+    }
+
+    if (g_client < 0 && now >= g_listen_refresh_tick) {
+        CloseListeners();
+        OpenListeners(true);
+        if (g_listen < 0) {
+            g_retry_tick = now + Ms(2000);
+            return;
+        }
+    }
+    if (g_client >= 0 && now - g_client_seen > Ms(CLIENT_IDLE_MS)) {
+        Disconnect("idle");
     }
 
     // The address can change (Wi-Fi reconnects): log it when it does

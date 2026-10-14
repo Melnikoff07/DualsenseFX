@@ -17,12 +17,22 @@ typedef enum {
     HapticPattern_Landing,      // strength scales with the fall time
     HapticPattern_SurfBump,
     HapticPattern_StaminaEmpty,
+    HapticPattern_RuneOn,       // a rune is raised to aim (Magnesis, Stasis)
+    HapticPattern_RuneLock,     // the aimed rune locked on a target
+    HapticPattern_MagnesisGrab,
+    HapticPattern_MagnesisDrop,
+    HapticPattern_StasisFreeze,
+    HapticPattern_StasisTick,   // in step with the flashing of the frozen target
+    HapticPattern_StasisRelease,
+    HapticPattern_BombSpawn,
+    HapticPattern_BombExplode,
     HapticPattern_Count,
 } HapticPattern;
 
 typedef enum {
     HapticLoop_BowTension,
     HapticLoop_Surf,
+    HapticLoop_Magnesis,        // hum while an object is held
     HapticLoop_Count,
 } HapticLoop;
 

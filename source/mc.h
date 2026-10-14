@@ -66,7 +66,7 @@ Result mcGetHapticsStatus(McHapticsStatus *out);
 // One voice of a haptic pattern for the DualSense voice coils (needs dualsense_hd_haptics in MissionControl):
 // a sine or low-passed noise sweeping from freq_start to freq_end, with an attack / hold / decay envelope
 typedef struct {
-    u8  slot;           // 0-7: replaces the voice playing in this slot; amplitude 0 on both sides stops the slot
+    u8  slot;           // 0-11: replaces the voice playing in this slot; amplitude 0 on both sides stops the slot
     u8  flags;          // McHapticFlag_*
     u8  amp_left;       // 0-255
     u8  amp_right;

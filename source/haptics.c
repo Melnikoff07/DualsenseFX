@@ -83,6 +83,39 @@ static const PatternDef Patterns[HapticPattern_Count] = {
         { 0,      90,  90,  50,  50, 330,  20,  40,  80 },
         { 0,      70,  70,  50,  50, 660,  20,  40,  80 },
     }},
+    [HapticPattern_RuneOn] = { "rune on", 1, {
+        { 0,      80,  80,  90, 150,   0,  60,  40, 150 },  // soft rising swell of the Sheikah Slate
+    }},
+    [HapticPattern_RuneLock] = { "rune lock", 1, {
+        { 0,     110, 110, 220, 260,   0,   1,  10,  40 },  // small click on the target
+    }},
+    [HapticPattern_MagnesisGrab] = { "magnesis grab", 2, {
+        { 0,     230, 230,  80,  50,   0,   2,  40, 160 },  // heavy clunk
+        { NOISE, 170, 170, 250, 250,   0,   1,  10,  60 },
+    }},
+    [HapticPattern_MagnesisDrop] = { "magnesis drop", 1, {
+        { 0,     150, 150,  60,  40,   0,   2,  20, 140 },
+    }},
+    [HapticPattern_StasisFreeze] = { "stasis freeze", 3, {
+        { 0,     220, 220, 320, 200,   0,   1,  15,  90 },  // sharp crack
+        { NOISE, 200, 200, 500, 500,   0,   1,   5,  40 },
+        { 0,     160, 160,  70,  70,  30,   3,  40, 200 },  // weight of the stopped object
+    }},
+    [HapticPattern_StasisTick] = { "stasis tick", 1, {
+        { 0,     150, 150, 180, 180,   0,   1,   8,  25 },
+    }},
+    [HapticPattern_StasisRelease] = { "stasis release", 2, {
+        { 0,     230, 230,  50,  35,   0,   3,  30, 220 },  // the stored force lets go
+        { NOISE, 150, 150, 150, 150,   0,   2,  20, 160 },
+    }},
+    [HapticPattern_BombSpawn] = { "bomb spawn", 1, {
+        { 0,      90,  90, 160, 100,   0,   1,  10,  60 },  // light pop
+    }},
+    [HapticPattern_BombExplode] = { "bomb explode", 3, {
+        { 0,     255, 255,  60,  25,   0,   2, 120, 600 },  // blast
+        { NOISE, 255, 255, 300,  80,   0,   1,  60, 450 },
+        { NOISE, 150, 150, 120, 120, 120,  30, 100, 600 },  // rumbling debris
+    }},
 };
 
 // Looping textures use fixed slots, one-shot patterns take the remaining slots in turn so that quick events in a row
@@ -101,10 +134,14 @@ static const LoopDef Loops[HapticLoop_Count] = {
     [HapticLoop_Surf] = { 1, { 2 }, {
         { NOISE | LOOP, 75, 75, 110, 110,   0,  150, 0, 0 },  // gravel under the shield
     }},
+    [HapticLoop_Magnesis] = { 2, { 3, 4 }, {
+        { LOOP,         80, 80,  55,  60,   0,  300, 0, 0 },  // magnetic hum
+        { NOISE | LOOP, 45, 45,  90,  90,   0,  300, 0, 0 },
+    }},
 };
 
-#define FIRST_ONESHOT_SLOT 3
-#define SLOT_COUNT         8
+#define FIRST_ONESHOT_SLOT 5
+#define SLOT_COUNT         12   // MissionControl HapticVoiceSlots
 
 static bool g_available;
 static u32 g_next_slot = FIRST_ONESHOT_SLOT;

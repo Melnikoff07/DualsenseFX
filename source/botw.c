@@ -25,6 +25,16 @@
 // Getting on the shield drops the ZL stance straight to nothing (0x18/0x98 -> 0), while lowering the
 // shield normally goes through 0x88/0x80 (seen on all 5 surf starts in one session). Surfing ends on a
 // jump / fall (0x2), shield raised, bow drawn, or after surf_timeout_ms without shield wear.
+//
+// Runes: main+2C9A668 holds the RuneMgr instance (found in the code: the bomb spawn function at +B96480 is called
+// with it from the player logic). Fields recorded live over the network while using each rune:
+//   +90  flags: 0x10 a rune is raised to aim (Magnesis / Stasis), 0x4 round bomb out, 0x8 cube bomb out
+//   +240 selected rune: 0 round bomb, 1 cube bomb, 2 Magnesis, 3 Stasis, 4 Cryonis
+//   +410 aimed rune locked on a target (pointer, 0 when not)
+//   +2B0 + i*0x28 bomb slots (round, cube): +20 state 0 none, 3 out, 0xE exploding
+//   +488 Stasis: 0x10000 while a target is frozen, 0x100 flashes with the frozen target (faster towards the end)
+// Magnesis holding an object: the player's current tool name at player +D44 reads "Item_Magnetglove" (the rune
+// flags drop the aim bit while holding).
 #include <stdio.h>
 #include <string.h>
 #include "botw.h"
@@ -59,6 +69,20 @@ void LogVerbose(const char *fmt, ...);
 #define STAMINA_OFFSET         0x2C9FD70
 #define STAMINA_CHAIN1         0x38
 #define STAMINA_CHAIN2         0x2AC
+#define RUNE_MGR_OFFSET        0x2C9A668
+#define RUNE_FIELDS_START      0x80     // one read covers the fields below
+#define RUNE_FIELDS_SIZE       0x420
+#define RUNE_FLAGS             0x90
+#define RUNE_FLAG_AIM          0x10
+#define RUNE_TARGET            0x410
+#define RUNE_BOMB_STATE        0x2D0    // + slot * 0x28
+#define RUNE_BOMB_STRIDE       0x28
+#define RUNE_BOMB_EXPLODING    0xE
+#define RUNE_STASIS            0x488
+#define STASIS_FROZEN          0x10000
+#define STASIS_FLASH           0x100
+#define PLAYER_TOOL_NAME       0xD44
+#define RUNE_LOCK_DEDUP_NS     (500 * 1000000ULL)
 #define LANDING_MIN_NS         (900 * 1000000ULL)   // shorter airborne stretches are ordinary jumps
 #define BREAK_DEDUP_NS         (1000 * 1000000ULL)
 
@@ -456,6 +480,76 @@ static bool IsLow(const BotwEquippedItem *e) {
     return e->present && e->value > 0 && e->value <= LOW_DURABILITY;
 }
 
+static u32 Field32(const u8 *fields, u32 offset) {
+    u32 v;
+    memcpy(&v, fields + offset - RUNE_FIELDS_START, sizeof(v));
+    return v;
+}
+
+static void UpdateRunes(BotwState *state, const DmntCheatProcessMetadata *meta) {
+    static u8 fields[RUNE_FIELDS_SIZE];
+    u64 mgr = 0;
+    if (state->player == 0 ||
+        R_FAILED(dmntchtReadCheatProcessMemory(meta->main_nso_extents.base + RUNE_MGR_OFFSET, &mgr, sizeof(mgr))) || mgr == 0 ||
+        R_FAILED(dmntchtReadCheatProcessMemory(mgr + RUNE_FIELDS_START, fields, sizeof(fields)))) {
+        state->runes_read = false;
+        return;
+    }
+    char tool[17] = {0};
+    bool held = R_SUCCEEDED(dmntchtReadCheatProcessMemory(state->player + PLAYER_TOOL_NAME, tool, 16)) &&
+                strcmp(tool, "Item_Magnetglove") == 0;
+
+    u32 flags = Field32(fields, RUNE_FLAGS);
+    u64 target;
+    memcpy(&target, fields + RUNE_TARGET - RUNE_FIELDS_START, sizeof(target));
+    u32 bombs[2] = { Field32(fields, RUNE_BOMB_STATE), Field32(fields, RUNE_BOMB_STATE + RUNE_BOMB_STRIDE) };
+    u32 stasis = Field32(fields, RUNE_STASIS);
+
+    if (state->runes_read && InGame(state) && !state->menu_open) {
+        u64 now = armGetSystemTick();
+        if ((flags & RUNE_FLAG_AIM) && !(state->rune_flags & RUNE_FLAG_AIM)) {
+            HapticsPlay(HapticPattern_RuneOn, 1.0f);
+        }
+        if ((flags & RUNE_FLAG_AIM) && target != 0 && state->rune_target == 0 && now - state->rune_lock_tick > armNsToTicks(RUNE_LOCK_DEDUP_NS)) {
+            state->rune_lock_tick = now;
+            HapticsPlay(HapticPattern_RuneLock, 1.0f);
+        }
+        if (held != state->magnesis_held) {
+            LogVerbose("botw: magnesis %s", held ? "grab" : "drop");
+            HapticsPlay(held ? HapticPattern_MagnesisGrab : HapticPattern_MagnesisDrop, 1.0f);
+        }
+        for (int i = 0; i < 2; ++i) {
+            if (bombs[i] == state->bomb_state[i]) {
+                continue;
+            }
+            if (bombs[i] == RUNE_BOMB_EXPLODING) {
+                LogVerbose("botw: bomb %d exploded", i);
+                HapticsPlay(HapticPattern_BombExplode, 1.0f);
+            } else if (state->bomb_state[i] == 0) {
+                HapticsPlay(HapticPattern_BombSpawn, 1.0f);
+            }
+        }
+        bool frozen = stasis & STASIS_FROZEN, was_frozen = state->stasis_flags & STASIS_FROZEN;
+        if (frozen && !was_frozen) {
+            LogVerbose("botw: stasis freeze");
+            HapticsPlay(HapticPattern_StasisFreeze, 1.0f);
+        } else if (!frozen && was_frozen) {
+            LogVerbose("botw: stasis release");
+            HapticsPlay(HapticPattern_StasisRelease, 1.0f);
+        } else if (frozen && (stasis & STASIS_FLASH) && !(state->stasis_flags & STASIS_FLASH)) {
+            HapticsPlay(HapticPattern_StasisTick, 1.0f);
+        }
+    }
+
+    state->runes_read = true;
+    state->rune_flags = flags;
+    state->rune_target = target;
+    state->bomb_state[0] = bombs[0];
+    state->bomb_state[1] = bombs[1];
+    state->stasis_flags = stasis;
+    state->magnesis_held = held;
+}
+
 bool BotwComputeEffects(BotwState *state, TriggerEffects *out) {
     out->right = TriggerEffectOff();
     out->left  = TriggerEffectOff();
@@ -511,9 +605,10 @@ bool BotwComputeEffects(BotwState *state, TriggerEffects *out) {
         out->left  = TriggerEffectVibration(0, g_botw_settings.surf_rumble_strength, 50);
     }
 
-    // Haptic textures: a faint shake while the bow is drawn, gravel while surfing
+    // Haptic textures: a faint shake while the bow is drawn, gravel while surfing, a hum while Magnesis holds something
     HapticsSetLoop(HapticLoop_BowTension, state->bow_state == 2 && bow->present && arrow->present);
     HapticsSetLoop(HapticLoop_Surf, state->surfing);
+    HapticsSetLoop(HapticLoop_Magnesis, state->magnesis_held);
 
     // Short event effects override the profile
     for (int t = 0; t < 2; ++t) {
@@ -601,6 +696,7 @@ void BotwUpdate(BotwState *state, const DmntCheatProcessMetadata *meta) {
 
     UpdateBow(state);
     UpdateActionFlags(state);
+    UpdateRunes(state, meta);
 
     TrackValues(state);
 }
