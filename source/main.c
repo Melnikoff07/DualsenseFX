@@ -386,27 +386,30 @@ void ReloadConfig(void) {
     LoadConfig();
 }
 
-// The overlay (or anything else) writes config.ini, the module picks the change up within a second
+// The overlay (or anything else) writes config.ini, the module picks the change up within a second. The content is
+// compared (CRC32): FAT timestamps have 2 s steps and a changed value often keeps the file size.
 static void CheckConfigChanged(void) {
     static u64 next_tick;
-    static time_t last_mtime;
-    static off_t last_size;
+    static u32 last_crc;
     static bool have;
+    static char buf[8192];
     u64 now = armGetSystemTick();
     if (now < next_tick) {
         return;
     }
     next_tick = now + armNsToTicks(1000000000ULL);
-    struct stat st;
-    if (stat(CONFIG_PATH, &st) != 0) {
+    FILE *f = fopen(CONFIG_PATH, "r");
+    if (f == NULL) {
         return;
     }
-    if (have && (st.st_mtime != last_mtime || st.st_size != last_size)) {
+    size_t n = fread(buf, 1, sizeof(buf), f);
+    fclose(f);
+    u32 crc = crc32Calculate(buf, n);
+    if (have && crc != last_crc) {
         LogLine("config.ini changed, reloading");
         ReloadConfig();
     }
-    last_mtime = st.st_mtime;
-    last_size = st.st_size;
+    last_crc = crc;
     have = true;
 }
 
