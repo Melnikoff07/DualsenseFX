@@ -12,6 +12,9 @@
 //
 // Player: main+2CA1A78 is the PlayerInfo instance, +80 is PlayerInfo::mPlayerActor (decomp actPlayerInfo.h),
 // hearts at player actor +848 (quarter hearts). From cheat codes, verified live.
+// Bow state at player actor +1F88, found with the correlation search and verified on console:
+//   0 no bow action, 1 nocking an arrow (~0.2 s), 2 drawn (player +18F8 points to the nocked arrow),
+//   3 arrow shot (~0.3 s, bow durability and arrow count drop here). Cancel with B goes 2 -> 0.
 #include <stdio.h>
 #include <string.h>
 #include "botw.h"
@@ -35,6 +38,7 @@ void LogLine(const char *fmt, ...);
 #define PLAYER_INFO_OFFSET     0x2CA1A78
 #define PLAYER_HEARTS_CHAIN1   0x80
 #define PLAYER_HEARTS_CHAIN2   0x848
+#define PLAYER_BOW_STATE       0x1F88
 
 #define SCAN_INTERVAL_NS       (500 * 1000000ULL)
 #define SETTLE_NS              (2000 * 1000000ULL)  // after death / reload
@@ -46,6 +50,7 @@ BotwSettings g_botw_settings = {
     .shield_hit_strength = 4,
     .shield_hit_ms = 200,
     .low_health_quarters = 4,
+    .bow_release_strength = 5,
 };
 
 static const u8 SupportedBuildId[8] = { 0x8E, 0x99, 0x78, 0xD5, 0x0B, 0xDD, 0x20, 0xB4 };
@@ -202,6 +207,22 @@ static void TrackValues(BotwState *state) {
     }
 }
 
+static void UpdateBow(BotwState *state) {
+    u32 bow_state = 0;
+    if (state->player == 0 || R_FAILED(dmntchtReadCheatProcessMemory(state->player + PLAYER_BOW_STATE, &bow_state, sizeof(bow_state)))) {
+        return;
+    }
+    if (bow_state == state->bow_state) {
+        return;
+    }
+
+    // String released: short snap on R2
+    if (bow_state == 3 && state->bow_state == 2 && g_botw_settings.bow_release_strength > 0) {
+        Pulse(state, 0, TriggerEffectVibration(0, g_botw_settings.bow_release_strength, 45), 120 * 1000000ULL);
+    }
+    state->bow_state = bow_state;
+}
+
 static void UpdatePlayer(BotwState *state, const DmntCheatProcessMetadata *meta) {
     u64 ptr = 0;
     u32 hearts = 0;
@@ -333,8 +354,11 @@ void BotwUpdate(BotwState *state, const DmntCheatProcessMetadata *meta) {
     u64 now = armGetSystemTick();
     if (now >= state->next_scan_tick) {
         state->next_scan_tick = now + armNsToTicks(SCAN_INTERVAL_NS);
+        state->player = BotwGetPlayerActor(meta);
         ScanPouch(state);
     }
+
+    UpdateBow(state);
 
     TrackValues(state);
 }

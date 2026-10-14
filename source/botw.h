@@ -28,6 +28,8 @@ typedef struct {
 
     s32 hearts;             // quarter hearts, -1 if unreadable
     s32 last_hearts;
+    u64 player;             // player actor, refreshed every scan
+    u32 bow_state;          // player +1F88: 0 none, 1 nocking, 2 drawn, 3 shot
     u64 hearts_changed_tick;
     bool menu_open;         // pause menu open (mEquippedWeapons is only filled then)
     u64 settle_until_tick;  // effects stay off until then (death, save reload)
@@ -41,6 +43,7 @@ typedef struct {
     u8 shield_hit_strength; // 0-8, 0 disables the block impact pulse
     u32 shield_hit_ms;
     u32 low_health_quarters; // heartbeat on the lightbar at or below this many quarter hearts, 0 disables
+    u8 bow_release_strength; // 0-8, pulse on R2 when an arrow is shot, 0 disables
 } BotwSettings;
 
 extern BotwSettings g_botw_settings;
