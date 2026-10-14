@@ -1,0 +1,4 @@
+[submodule "MissionControl"]
+	path = MissionControl
+	url = https://github.com/Melnikoff07/MissionControl.git
+	branch = dualsense-triggers
