@@ -15,6 +15,9 @@
 // Bow state at player actor +1F88, found with the correlation search and verified on console:
 //   0 no bow action, 1 nocking an arrow (~0.2 s), 2 drawn (player +18F8 points to the nocked arrow),
 //   3 arrow shot (~0.3 s, bow durability and arrow count drop here). Cancel with B goes 2 -> 0.
+// Action flags at player actor +C40 (verified on console):
+//   0x18 while ZL is held (guard / lock-on stance, also with two-handed weapons), 0x40000000 bow aiming,
+//   0xC000 for ~0.13 s when Daruk's Protection blocks a hit.
 #include <stdio.h>
 #include <string.h>
 #include "botw.h"
@@ -39,6 +42,8 @@ void LogLine(const char *fmt, ...);
 #define PLAYER_HEARTS_CHAIN1   0x80
 #define PLAYER_HEARTS_CHAIN2   0x848
 #define PLAYER_BOW_STATE       0x1F88
+#define PLAYER_ACTION_FLAGS    0xC40
+#define ACTION_DARUK_BLOCK     0xC000
 
 #define SCAN_INTERVAL_NS       (500 * 1000000ULL)
 #define SETTLE_NS              (2000 * 1000000ULL)  // after death / reload
@@ -53,6 +58,7 @@ BotwSettings g_botw_settings = {
     .low_health_quarters = 4,
     .bow_release_strength = 0,
     .bow_drawn_strength = 8,
+    .daruk_strength = 8,
 };
 
 static const u8 SupportedBuildId[8] = { 0x8E, 0x99, 0x78, 0xD5, 0x0B, 0xDD, 0x20, 0xB4 };
@@ -233,6 +239,25 @@ static void UpdateBow(BotwState *state) {
     state->bow_state = bow_state;
 }
 
+static void UpdateActionFlags(BotwState *state) {
+    u32 flags = 0;
+    if (state->player == 0 || R_FAILED(dmntchtReadCheatProcessMemory(state->player + PLAYER_ACTION_FLAGS, &flags, sizeof(flags)))) {
+        return;
+    }
+
+    // Daruk's Protection blocked a hit: strong push on L2 and an orange flash
+    if ((flags & ACTION_DARUK_BLOCK) && !(state->action_flags & ACTION_DARUK_BLOCK)) {
+        LogLine("botw: Daruk's Protection blocked a hit");
+        u8 k = g_botw_settings.daruk_strength;
+        if (k > 0) {
+            const u8 stiff[10] = { k, k, k, k, k, k, k, k, k, k };
+            Pulse(state, 1, TriggerEffectFeedback(stiff), 400 * 1000000ULL);
+        }
+        state->flash_until_tick = armGetSystemTick() + armNsToTicks(400 * 1000000ULL);
+    }
+    state->action_flags = flags;
+}
+
 static void UpdatePlayer(BotwState *state, const DmntCheatProcessMetadata *meta) {
     u64 ptr = 0;
     u32 hearts = 0;
@@ -331,6 +356,13 @@ u64 BotwGetPlayerActor(const DmntCheatProcessMetadata *meta) {
 
 // Heartbeat: two red flashes per second ("lub-dub") while health is low
 bool BotwComputeLightbar(BotwState *state, u8 *r, u8 *g, u8 *b) {
+    if (state->supported && armGetSystemTick() < state->flash_until_tick) {
+        *r = 0xFF;
+        *g = 0x50;
+        *b = 0x00;
+        return true;
+    }
+
     if (!state->supported || state->hearts <= 0 || g_botw_settings.low_health_quarters == 0 ||
         (u32)state->hearts > g_botw_settings.low_health_quarters) {
         return false;
@@ -378,6 +410,7 @@ void BotwUpdate(BotwState *state, const DmntCheatProcessMetadata *meta) {
     }
 
     UpdateBow(state);
+    UpdateActionFlags(state);
 
     TrackValues(state);
 }
