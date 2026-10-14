@@ -35,6 +35,12 @@
 //   +488 Stasis: 0x10000 while a target is frozen, 0x100 flashes with the frozen target (faster towards the end)
 //   +94  one-frame events: 0x21 rune raised, 0x20 rune put away; with Cryonis 0x4 = a pillar was made (+168 reads 1
 //        in the same frame) or broken (+168 stays 0). Recorded at ~58 Hz, each lasts one game frame.
+// Footsteps: the game's sound engine is nn::atk (RTTI names kept). main+2CC1670 holds the SoundArchivePlayer,
+// SoundArchivePlayer +128 points to a pool of 64 WaveSound objects, 0x3A0 bytes each (vtable main+2C17828, checked
+// before use). Per slot, recorded live while running on several surfaces: +100 reads FFFFFFFF while the slot is
+// free, +104 is a serial that changes with every new sound, and the u16 at +2F2 marks the step sounds
+// (0x1C on grass / sand / stone, 0x14 / 0x17 / 0x18 on wood; meaning of the field unknown). Ground material under the
+// player: player +1CA8 (Undefined, Soil, Stone, Sand, Metal, WireNet, Grass, Wood, Water, Snow, ... from rodata).
 // Magnesis holding an object: the player's current tool name at player +D44 reads "Item_Magnetglove" (the rune
 // flags drop the aim bit while holding).
 #include <stdio.h>
@@ -90,6 +96,16 @@ void LogVerbose(const char *fmt, ...);
 #define STASIS_FLASH           0x100
 #define PLAYER_TOOL_NAME       0xD44
 #define RUNE_LOCK_DEDUP_NS     (500 * 1000000ULL)
+#define PLAYER_GROUND_MATERIAL 0x1CA8
+#define SOUND_ARCHIVE_PLAYER   0x2CC1670
+#define SAP_WAVE_POOL          0x128
+#define WAVE_SOUND_VTABLE      0x2C17828
+#define WAVE_SOUND_SIZE        0x3A0
+#define WAVE_SOUND_COUNT       64
+#define WAVE_FREE              0x100
+#define WAVE_SERIAL            0x104
+#define WAVE_STEP_MARK         0x2F2
+#define STEP_DEDUP_NS          (150 * 1000000ULL)
 #define LANDING_MIN_NS         (900 * 1000000ULL)   // shorter airborne stretches are ordinary jumps
 #define BREAK_DEDUP_NS         (1000 * 1000000ULL)
 
@@ -472,6 +488,11 @@ static void UpdatePlayer(BotwState *state, const DmntCheatProcessMetadata *meta)
         state->stamina = stamina;
     }
 
+    u32 material;
+    if (state->player != 0 && R_SUCCEEDED(dmntchtReadCheatProcessMemory(state->player + PLAYER_GROUND_MATERIAL, &material, sizeof(material)))) {
+        state->ground_material = material;
+    }
+
     u64 equipped[4] = {0};
     bool menu_open = false;
     if (R_SUCCEEDED(dmntchtReadCheatProcessMemory(state->pmdm + PMDM_EQUIPPED_OFFSET, equipped, sizeof(equipped)))) {
@@ -559,7 +580,62 @@ static void UpdateRunes(BotwState *state, const DmntCheatProcessMetadata *meta) 
     state->magnesis_held = held;
 }
 
+// Finds the WaveSound pool and checks it is what we think it is (first and last slot carry the WaveSound vtable)
+static void UpdateWavePool(BotwState *state, const DmntCheatProcessMetadata *meta) {
+    u64 now = armGetSystemTick();
+    if (now < state->wave_pool_check_tick) {
+        return;
+    }
+    state->wave_pool_check_tick = now + armNsToTicks(5000 * 1000000ULL);
+    u64 base = meta->main_nso_extents.base, sap = 0, pool = 0, first = 0, last = 0;
+    bool ok = R_SUCCEEDED(dmntchtReadCheatProcessMemory(base + SOUND_ARCHIVE_PLAYER, &sap, sizeof(sap))) && sap != 0 &&
+              R_SUCCEEDED(dmntchtReadCheatProcessMemory(sap + SAP_WAVE_POOL, &pool, sizeof(pool))) && pool != 0 &&
+              R_SUCCEEDED(dmntchtReadCheatProcessMemory(pool, &first, sizeof(first))) &&
+              R_SUCCEEDED(dmntchtReadCheatProcessMemory(pool + (WAVE_SOUND_COUNT - 1) * WAVE_SOUND_SIZE, &last, sizeof(last))) &&
+              first == base + WAVE_SOUND_VTABLE && last == base + WAVE_SOUND_VTABLE;
+    if (ok != (state->wave_pool != 0) || (ok && pool != state->wave_pool)) {
+        LogLine(ok ? "botw: sound pool at %010lX, footsteps on" : "botw: sound pool not found (%010lX), footsteps off", pool);
+        state->wave_serials_valid = false;
+    }
+    state->wave_pool = ok ? pool : 0;
+}
+
+static void PollFootsteps(BotwState *state) {
+    static u8 pool[WAVE_SOUND_COUNT * WAVE_SOUND_SIZE];
+    if (state->wave_pool == 0 || g_haptic_settings.footsteps == 0 ||
+        R_FAILED(dmntchtReadCheatProcessMemory(state->wave_pool, pool, sizeof(pool)))) {
+        state->wave_serials_valid = false;
+        return;
+    }
+    bool step = false;
+    for (u32 i = 0; i < WAVE_SOUND_COUNT; ++i) {
+        const u8 *slot = pool + i * WAVE_SOUND_SIZE;
+        u32 free_mark, serial;
+        u16 mark;
+        memcpy(&free_mark, slot + WAVE_FREE, sizeof(free_mark));
+        memcpy(&serial, slot + WAVE_SERIAL, sizeof(serial));
+        memcpy(&mark, slot + WAVE_STEP_MARK, sizeof(mark));
+        if (state->wave_serials_valid && free_mark != 0xFFFFFFFF && serial != state->wave_serials[i] &&
+            (mark == 0x1C || mark == 0x14 || mark == 0x17 || mark == 0x18)) {
+            step = true;
+        }
+        state->wave_serials[i] = serial;
+    }
+    bool was_valid = state->wave_serials_valid;
+    state->wave_serials_valid = true;
+
+    u64 now = armGetSystemTick();
+    if (step && was_valid && now - state->last_step_tick > armNsToTicks(STEP_DEDUP_NS) && InGame(state) && !state->menu_open) {
+        state->last_step_tick = now;
+        state->step_left = !state->step_left;
+        HapticsPlayStep(state->ground_material, state->step_left);
+    }
+}
+
 void BotwPollFast(BotwState *state) {
+    if (state->supported) {
+        PollFootsteps(state);
+    }
     if (!state->supported || !state->runes_read || state->rune_selected != RUNE_CRYONIS) {
         state->cryonis_event = false;
         return;
@@ -726,6 +802,7 @@ void BotwUpdate(BotwState *state, const DmntCheatProcessMetadata *meta) {
     UpdateBow(state);
     UpdateActionFlags(state);
     UpdateRunes(state, meta);
+    UpdateWavePool(state, meta);
 
     TrackValues(state);
 }

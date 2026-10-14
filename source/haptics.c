@@ -8,7 +8,7 @@
 
 void LogVerbose(const char *fmt, ...);
 
-HapticSettings g_haptic_settings = { .enabled = true, .strength = 100 };
+HapticSettings g_haptic_settings = { .enabled = true, .strength = 100, .footsteps = 100 };
 
 #define NOISE McHapticFlag_Noise
 #define LOOP  McHapticFlag_Loop
@@ -150,6 +150,22 @@ static const LoopDef Loops[HapticLoop_Count] = {
     }},
 };
 
+// Footstep taps by ground material (index into Undefined,Soil,Stone,Sand,Metal,WireNet,Grass,Wood,Water,Snow,...)
+typedef struct {
+    u32 count;
+    VoiceDef voices[2];
+} StepDef;
+
+static const StepDef Steps[] = {
+    [1] = { 2, {{ 0,     60, 60,  70,  60, 0,  2, 10,  60 }, { NOISE, 30, 30, 150, 150, 0, 1,  5, 40 }}},  // soil: soft thud
+    [2] = { 2, {{ 0,     70, 70, 140, 120, 0,  1,  5,  35 }, { NOISE, 40, 40, 600, 600, 0, 1,  2, 25 }}},  // stone: crisp click
+    [3] = { 1, {{ NOISE, 55, 55, 250, 200, 0, 10, 20,  80 }}},                                            // sand: soft crunch
+    [4] = { 2, {{ 0,     50, 50, 300, 300, 0,  1,  5, 120 }, { 0,     25, 25, 450, 450, 0, 1,  3, 80 }}},  // metal: ringing tap
+    [6] = { 2, {{ NOISE, 35, 35, 400, 350, 0, 15, 20,  70 }, { 0,     30, 30,  60,  60, 0, 2,  5, 40 }}},  // grass: swish
+    [7] = { 2, {{ 0,     75, 75, 180, 120, 0,  1,  6,  60 }, { 0,     40, 40,  90,  90, 0, 1,  5, 80 }}},  // wood: hollow knock
+    [9] = { 1, {{ NOISE, 55, 55, 180, 160, 0,  8, 30,  90 }}},                                            // snow: crunch
+};
+
 #define FIRST_ONESHOT_SLOT 5
 #define SLOT_COUNT         12   // MissionControl HapticVoiceSlots
 
@@ -207,6 +223,22 @@ void HapticsPlay(HapticPattern pattern, float amount) {
     }
     Result rc = mcPlayHaptics(voices, p->count);
     LogVerbose("haptics: %s%s", p->name, R_FAILED(rc) ? " (failed)" : "");
+}
+
+void HapticsPlayStep(u32 material, bool left) {
+    if (!g_available || !g_haptic_settings.enabled || g_haptic_settings.footsteps == 0) {
+        return;
+    }
+    const StepDef *s = material < sizeof(Steps) / sizeof(Steps[0]) && Steps[material].count ? &Steps[material] : &Steps[1];
+    McHapticVoice voices[2];
+    for (u32 i = 0; i < s->count; ++i) {
+        voices[i] = MakeVoice(&s->voices[i], g_next_slot, g_haptic_settings.footsteps / 100.0f);
+        // The other hand gets a softer copy, steps alternate between the hands
+        u8 *soft = left ? &voices[i].amp_right : &voices[i].amp_left;
+        *soft = *soft * 6 / 10;
+        g_next_slot = g_next_slot + 1 >= SLOT_COUNT ? FIRST_ONESHOT_SLOT : g_next_slot + 1;
+    }
+    mcPlayHaptics(voices, s->count);
 }
 
 void HapticsSetLoop(HapticLoop loop, bool on) {

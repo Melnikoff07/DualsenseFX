@@ -324,6 +324,8 @@ static void LoadConfig(void) {
             g_haptic_settings.enabled = value != 0;
         } else if (sscanf(p, "haptics_strength = %u", &value) == 1 && value <= 200) {
             g_haptic_settings.strength = value;
+        } else if (sscanf(p, "footstep_strength = %u", &value) == 1 && value <= 200) {
+            g_haptic_settings.footsteps = value;
         } else if (sscanf(p, "low_health_quarters = %u", &value) == 1 && value <= 120) {
             g_botw_settings.low_health_quarters = value;
         } else if (sscanf(p, "search = %u", &value) == 1) {
@@ -346,7 +348,7 @@ static void LoadConfig(void) {
     LogLine("config: verbose=%u", g_verbose);
     LogLine("config: attach_delay_s=%u, shield_hit_strength=%u, shield_hit_ms=%u, low_health_quarters=%u, %u watches",
             g_attach_delay_s, g_botw_settings.shield_hit_strength, g_botw_settings.shield_hit_ms, g_botw_settings.low_health_quarters, g_num_watches);
-    LogLine("config: haptics=%u, haptics_strength=%u", g_haptic_settings.enabled, g_haptic_settings.strength);
+    LogLine("config: haptics=%u, haptics_strength=%u, footstep_strength=%u", g_haptic_settings.enabled, g_haptic_settings.strength, g_haptic_settings.footsteps);
     LogLine("config: net=%u, net_port=%u, token %s", g_net_settings.enabled, g_net_settings.port, g_net_settings.token[0] ? "set" : "empty");
     if (g_search_settings.enabled) {
         LogLine("config: search mode %u, region +%X size %X", g_search_settings.mode, g_search_settings.offset, g_search_settings.size);

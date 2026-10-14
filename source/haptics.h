@@ -41,6 +41,7 @@ typedef enum {
 typedef struct {
     bool enabled;       // haptics=1 in config.ini
     u32 strength;       // percent, scales every pattern
+    u32 footsteps;      // percent, 0 disables footstep taps
 } HapticSettings;
 
 extern HapticSettings g_haptic_settings;
@@ -50,6 +51,10 @@ void HapticsSetAvailable(bool available);
 
 // amount: 0.0-1.0 for patterns that scale (damage, landing), ignored by the others
 void HapticsPlay(HapticPattern pattern, float amount);
+
+// One footstep on the given ground material (BotW material index), in the hand of the foot that stepped;
+// strength in percent of the footstep_strength setting
+void HapticsPlayStep(u32 material, bool left);
 
 // Continuous textures, only sent when the state changes
 void HapticsSetLoop(HapticLoop loop, bool on);

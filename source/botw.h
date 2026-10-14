@@ -59,6 +59,15 @@ typedef struct {
     u64 rune_mgr;
     u32 rune_selected;
     bool cryonis_event;     // event bit seen on the last fast poll
+
+    // Footsteps, from the game's own step sounds (see botw.c)
+    u32 ground_material;
+    u64 wave_pool;          // nn::atk WaveSound pool, 0 until found and checked
+    u64 wave_pool_check_tick;
+    bool wave_serials_valid;
+    u32 wave_serials[64];
+    u64 last_step_tick;
+    bool step_left;
 } BotwState;
 
 // Tunables from config.ini
