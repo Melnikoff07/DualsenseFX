@@ -19,6 +19,7 @@
 //   0x18 while ZL is held (guard / lock-on stance, also with two-handed weapons), 0x40000000 bow aiming,
 //   0xC000 for ~0.13 s when Daruk's Protection blocks a hit.
 //   0x2 for 0.2-4.5 s stretches: NOT shield surfing (stays off while surfing), probably jumping / airborne.
+// Stamina: [[main+2C9FD70]+38]+2AC, f32, 1800 = one full wheel (from cheat codes, verified live).
 // Shield surfing has no known flag yet, but it wears the shield down every few seconds while
 // there is no ZL stance, whereas a blocked hit always happens in the ZL stance.
 // Getting on the shield drops the ZL stance straight to nothing (0x18/0x98 -> 0), while lowering the
@@ -27,6 +28,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "botw.h"
+#include "haptics.h"
 #include "search.h"
 
 void LogLine(const char *fmt, ...);
@@ -54,6 +56,11 @@ void LogVerbose(const char *fmt, ...);
 #define ACTION_DARUK_BLOCK     0xC000
 #define ACTION_ZL_STANCE       0x18
 #define ACTION_AIRBORNE        0x2   // probably
+#define STAMINA_OFFSET         0x2C9FD70
+#define STAMINA_CHAIN1         0x38
+#define STAMINA_CHAIN2         0x2AC
+#define LANDING_MIN_NS         (900 * 1000000ULL)   // shorter airborne stretches are ordinary jumps
+#define BREAK_DEDUP_NS         (1000 * 1000000ULL)
 
 #define SCAN_INTERVAL_NS       (500 * 1000000ULL)
 #define SETTLE_NS              (2000 * 1000000ULL)  // after death / reload
@@ -130,6 +137,35 @@ static void Pulse(BotwState *state, int trigger, TriggerEffect effect, u64 durat
 
 static void SetSurfing(BotwState *state, bool surfing, const char *why);
 
+// A save is loaded and gameplay is running: something is equipped and no death / reload is being settled
+static bool InGame(const BotwState *state) {
+    bool loaded = false;
+    for (int t = 0; t < BotwSlot_Count; ++t) {
+        loaded |= state->equipped[t].present;
+    }
+    return loaded && state->hearts > 0 && armGetSystemTick() >= state->settle_until_tick;
+}
+
+static void PlayBreak(BotwState *state, const char *what) {
+    u64 now = armGetSystemTick();
+    if (now - state->break_tick < armNsToTicks(BREAK_DEDUP_NS)) {
+        return;
+    }
+    state->break_tick = now;
+    LogVerbose("botw: %s broke", what);
+    HapticsPlay(HapticPattern_WeaponBreak, 1.0f);
+}
+
+static HapticPattern HitPattern(const BotwEquippedItem *weapon) {
+    if (strncmp(weapon->name, "Weapon_Lsword_", 14) == 0) {
+        return HapticPattern_HitHeavy;
+    }
+    if (strncmp(weapon->name, "Weapon_Spear_", 13) == 0) {
+        return HapticPattern_HitSpear;
+    }
+    return HapticPattern_HitSword;
+}
+
 static void ScanPouch(BotwState *state) {
     BotwEquippedItem found[BotwSlot_Count] = {0};
     u32 valid_items = 0;
@@ -186,6 +222,11 @@ static void ScanPouch(BotwState *state) {
     for (int t = 0; t < BotwSlot_Count; ++t) {
         BotwEquippedItem *old = &state->equipped[t];
         BotwEquippedItem *now = &found[t];
+        // An equipped weapon or shield on its last hit vanished outside the menu: it broke
+        if (t != BotwSlot_Arrow && old->present && !now->present && old->value > 0 && old->value <= 100 &&
+            !state->menu_open && moved < 2 && InGame(state)) {
+            PlayBreak(state, SlotNames[t]);
+        }
         if (old->present != now->present || old->slot != now->slot || strcmp(old->name, now->name) != 0) {
             if (now->present) {
                 LogVerbose("botw: equipped %-6s slot %3u %-24s value %d (%u items in pouch)", SlotNames[t], now->slot, now->name, now->value, valid_items);
@@ -218,6 +259,15 @@ static void TrackValues(BotwState *state) {
             Settle(state, "values reset, save loading");
         } else if (value < e->value && e->value - value <= 1000) {
             // Durability went down: the item was used
+            bool in_game = InGame(state);
+            if (in_game && t != BotwSlot_Arrow && value <= 0) {
+                PlayBreak(state, SlotNames[t]);
+            } else if (in_game && t == BotwSlot_Sword) {
+                HapticsPlay(HitPattern(e), 1.0f);
+            } else if (in_game && t == BotwSlot_Shield) {
+                HapticsPlay((state->action_flags & ACTION_ZL_STANCE) ? HapticPattern_ShieldBlock : HapticPattern_SurfBump, 1.0f);
+            }
+
             if (t == BotwSlot_Shield && !(state->action_flags & ACTION_ZL_STANCE)) {
                 // Shield worn down without guarding: shield surfing. Vibration, the finger is usually just resting on the trigger
                 LogVerbose("botw: shield wear while surfing");
@@ -254,6 +304,15 @@ static void UpdateBow(BotwState *state) {
     }
     if (bow_state == state->bow_state) {
         return;
+    }
+
+    if (InGame(state)) {
+        if (bow_state == 1) {
+            HapticsPlay(HapticPattern_BowNock, 1.0f);
+        } else if (bow_state == 3 && state->bow_state == 2) {
+            HapticsSetLoop(HapticLoop_BowTension, false);
+            HapticsPlay(HapticPattern_BowRelease, 1.0f);
+        }
     }
 
     // String released: short snap on R2
@@ -295,9 +354,23 @@ static void UpdateActionFlags(BotwState *state) {
             Pulse(state, 1, TriggerEffectVibration(0, k, 40), 300 * 1000000ULL);
         }
         state->flash_until_tick = armGetSystemTick() + armNsToTicks(400 * 1000000ULL);
+        if (InGame(state)) {
+            HapticsPlay(HapticPattern_Daruk, 1.0f);
+        }
     }
     if ((flags & ACTION_AIRBORNE) != (state->action_flags & ACTION_AIRBORNE)) {
         LogVerbose("botw: airborne(?) flag %s", (flags & ACTION_AIRBORNE) ? "on" : "off");
+        u64 now = armGetSystemTick();
+        if (flags & ACTION_AIRBORNE) {
+            state->airborne_since_tick = now;
+        } else if (state->airborne_since_tick != 0) {
+            // Landed after a real fall (also after gliding: the paraglider shows up as airborne too)
+            u64 airborne_ns = armTicksToNs(now - state->airborne_since_tick);
+            if (airborne_ns >= LANDING_MIN_NS && !state->surfing && InGame(state)) {
+                HapticsPlay(HapticPattern_Landing, airborne_ns / 2500000000.0f);
+            }
+            state->airborne_since_tick = 0;
+        }
     }
 
     // Shield stance dropped straight to nothing: the player got on the shield
@@ -315,6 +388,7 @@ static void UpdateActionFlags(BotwState *state) {
 }
 
 static void UpdatePlayer(BotwState *state, const DmntCheatProcessMetadata *meta) {
+    bool in_game_before = InGame(state);    // before the new hearts value (death settles the effects)
     u64 ptr = 0;
     u32 hearts = 0;
     state->hearts = -1;
@@ -327,8 +401,30 @@ static void UpdatePlayer(BotwState *state, const DmntCheatProcessMetadata *meta)
         Settle(state, "player died");
     }
     if (state->hearts != state->last_hearts) {
+        // Damage and healing, only once a save is loaded (hearts read 1 on the title screen and while loading)
+        s32 before = state->last_hearts;
+        bool was_in_game = before > 0 && in_game_before;
+        if (was_in_game && state->hearts == 0) {
+            HapticsPlay(HapticPattern_Damage, 1.0f);
+        } else if (was_in_game && state->hearts > 0 && state->hearts < before) {
+            HapticsPlay(HapticPattern_Damage, 0.35f + 0.1f * (before - state->hearts));
+        } else if (was_in_game && state->hearts > before) {
+            HapticsPlay(HapticPattern_Heal, 1.0f);
+        }
         state->last_hearts = state->hearts;
         state->hearts_changed_tick = armGetSystemTick();
+    }
+
+    // Stamina ran out
+    float stamina = -1.0f;
+    if (R_SUCCEEDED(dmntchtReadCheatProcessMemory(meta->main_nso_extents.base + STAMINA_OFFSET, &ptr, sizeof(ptr))) && ptr != 0 &&
+        R_SUCCEEDED(dmntchtReadCheatProcessMemory(ptr + STAMINA_CHAIN1, &ptr, sizeof(ptr))) && ptr != 0 &&
+        R_SUCCEEDED(dmntchtReadCheatProcessMemory(ptr + STAMINA_CHAIN2, &stamina, sizeof(stamina)))) {
+        if (state->stamina > 1.0f && stamina <= 1.0f && stamina >= 0.0f && InGame(state)) {
+            LogVerbose("botw: stamina ran out");
+            HapticsPlay(HapticPattern_StaminaEmpty, 1.0f);
+        }
+        state->stamina = stamina;
     }
 
     u64 equipped[4] = {0};
@@ -360,6 +456,7 @@ bool BotwComputeEffects(BotwState *state, TriggerEffects *out) {
         state->effects_off_logged = off;
     }
     if (off) {
+        HapticsStopAll();
         return true;
     }
 
@@ -399,6 +496,10 @@ bool BotwComputeEffects(BotwState *state, TriggerEffects *out) {
         out->right = TriggerEffectVibration(0, g_botw_settings.surf_rumble_strength, 50);
         out->left  = TriggerEffectVibration(0, g_botw_settings.surf_rumble_strength, 50);
     }
+
+    // Haptic textures: a faint shake while the bow is drawn, gravel while surfing
+    HapticsSetLoop(HapticLoop_BowTension, state->bow_state == 2 && bow->present && arrow->present);
+    HapticsSetLoop(HapticLoop_Surf, state->surfing);
 
     // Short event effects override the profile
     for (int t = 0; t < 2; ++t) {
@@ -444,8 +545,17 @@ bool BotwComputeLightbar(BotwState *state, u8 *r, u8 *g, u8 *b) {
         return false;
     }
 
-    u64 ms = armTicksToNs(armGetSystemTick()) / 1000000ULL % 1000;
+    u64 total_ms = armTicksToNs(armGetSystemTick()) / 1000000ULL;
+    u64 ms = total_ms % 1000;
     bool flash = ms < 120 || (ms >= 250 && ms < 370);
+
+    // Felt heartbeat in step with the lightbar: one "lub-dub" at the start of every second
+    if (total_ms / 1000 != state->heartbeat_second) {
+        state->heartbeat_second = total_ms / 1000;
+        if (ms < 200 && !state->menu_open) {
+            HapticsPlay(HapticPattern_Heartbeat, 1.0f);
+        }
+    }
     *r = flash ? 0x80 : 0x0C;
     *g = 0;
     *b = 0;

@@ -41,6 +41,10 @@ typedef struct {
     u64 pulse_until_tick[2];// short event effects: [0] right trigger, [1] left trigger
     TriggerEffect pulse_effect[2];
     bool effects_off_logged;
+    float stamina;          // 1800 = one wheel, -1 unreadable
+    u64 airborne_since_tick;
+    u64 break_tick;         // last weapon break pattern, to play it once
+    u64 heartbeat_second;   // last second a felt heartbeat was played
 } BotwState;
 
 // Tunables from config.ini

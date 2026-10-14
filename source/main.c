@@ -13,6 +13,7 @@
 #include "dmntcht.h"
 #include "mc.h"
 #include "botw.h"
+#include "haptics.h"
 #include "search.h"
 
 #define BOTW_PROGRAM_ID 0x01007EF00011E000ULL
@@ -306,6 +307,10 @@ static void LoadConfig(void) {
             g_botw_settings.daruk_strength = value;
         } else if (sscanf(p, "bow_release_strength = %u", &value) == 1 && value <= 8) {
             g_botw_settings.bow_release_strength = value;
+        } else if (sscanf(p, "haptics = %u", &value) == 1) {
+            g_haptic_settings.enabled = value != 0;
+        } else if (sscanf(p, "haptics_strength = %u", &value) == 1 && value <= 200) {
+            g_haptic_settings.strength = value;
         } else if (sscanf(p, "low_health_quarters = %u", &value) == 1 && value <= 120) {
             g_botw_settings.low_health_quarters = value;
         } else if (sscanf(p, "search = %u", &value) == 1) {
@@ -326,6 +331,7 @@ static void LoadConfig(void) {
     LogLine("config: verbose=%u", g_verbose);
     LogLine("config: attach_delay_s=%u, shield_hit_strength=%u, shield_hit_ms=%u, low_health_quarters=%u, %u watches",
             g_attach_delay_s, g_botw_settings.shield_hit_strength, g_botw_settings.shield_hit_ms, g_botw_settings.low_health_quarters, g_num_watches);
+    LogLine("config: haptics=%u, haptics_strength=%u", g_haptic_settings.enabled, g_haptic_settings.strength);
     if (g_search_settings.enabled) {
         LogLine("config: search mode %u, region +%X size %X", g_search_settings.mode, g_search_settings.offset, g_search_settings.size);
     }
@@ -413,6 +419,7 @@ static void CheckMemoryRead(const DmntCheatProcessMetadata *meta) {
 
 static void CloseSession(GameSession *s) {
     SearchStop();
+    HapticsSetAvailable(false);
     if (s->mc_open) {
         mcExit();
         s->mc_open = false;
@@ -454,6 +461,7 @@ static void TryAttach(GameSession *s) {
 
     if (R_SUCCEEDED(rc = mcInitialize())) {
         s->mc_open = true;
+        HapticsSetAvailable(true);
 
         char version[64];
         mcGetBuildVersionString(version, sizeof(version));
@@ -574,7 +582,7 @@ static void LogHapticsStatus(bool mc_open) {
     if (!have_last || st.enabled != last.enabled || st.thread_running != last.thread_running ||
         st.reports_sent != last.reports_sent || st.reports_failed != last.reports_failed ||
         st.chirps != last.chirps || st.fallbacks != last.fallbacks ||
-        st.input_reports != last.input_reports || st.input_other != last.input_other) {
+        st.input_reports != last.input_reports || st.input_other != last.input_other || st.voices != last.voices) {
         LogLine("haptics: enabled %u, thread %u, ticks %u, sent %u, failed %u, last error 0x%X, "
                 "prime failed 0x%X, chirps %u, fallbacks %u",
                 st.enabled, st.thread_running, st.ticks, st.reports_sent, st.reports_failed, st.last_error,
@@ -583,8 +591,8 @@ static void LogHapticsStatus(bool mc_open) {
                 st.input_reports, st.input_mic, st.input_other,
                 st.last_input[0], st.last_input[1], st.last_input[2], st.last_input[3],
                 st.last_input[4], st.last_input[5], st.last_input[6], st.last_input[7]);
-        LogLine("haptics input phases: connect %u, pause %u, test buzz %u, after %u",
-                st.input_phase[0], st.input_phase[1], st.input_phase[2], st.input_phase[3]);
+        LogLine("haptics input phases: connect %u, pause %u, test buzz %u, after %u; pattern voices %u",
+                st.input_phase[0], st.input_phase[1], st.input_phase[2], st.input_phase[3], st.voices);
         last = st;
         have_last = true;
     }

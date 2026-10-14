@@ -44,9 +44,35 @@ typedef struct {
     u32 input_other;    // input reports with other ids
     u8  last_input[8];  // first bytes of the last 0x31 input report
     u32 input_phase[4]; // 0x31 input reports per startup phase: connect, pause, test buzz, after the test
+    u32 voices;         // pattern voices received
 } McHapticsStatus;
 
 Result mcGetHapticsStatus(McHapticsStatus *out);
+
+// One voice of a haptic pattern for the DualSense voice coils (needs dualsense_hd_haptics in MissionControl):
+// a sine or low-passed noise sweeping from freq_start to freq_end, with an attack / hold / decay envelope
+typedef struct {
+    u8  slot;           // 0-7: replaces the voice playing in this slot; amplitude 0 on both sides stops the slot
+    u8  flags;          // McHapticFlag_*
+    u8  amp_left;       // 0-255
+    u8  amp_right;
+    u16 freq_start;     // Hz: sine frequency, or noise low-pass cutoff
+    u16 freq_end;
+    u16 delay_ms;
+    u16 attack_ms;
+    u16 hold_ms;        // a looping voice holds until replaced or stopped
+    u16 decay_ms;
+} McHapticVoice;
+
+enum {
+    McHapticFlag_Noise = 0x01,
+    McHapticFlag_Loop  = 0x02,
+};
+
+#define MC_HAPTIC_VOICES_MAX 4
+
+Result mcPlayHaptics(const McHapticVoice *voices, u32 count);
+Result mcStopHaptics(void);
 Result mcSetLightbarColour(u8 r, u8 g, u8 b);
 Result mcClearLightbarColour(void);
 

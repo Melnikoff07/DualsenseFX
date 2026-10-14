@@ -10,6 +10,8 @@ enum {
     McCmd_SetLightbarColour     = 9,
     McCmd_ClearLightbarColour   = 10,
     McCmd_GetHapticsStatus      = 11,
+    McCmd_PlayHaptics           = 12,
+    McCmd_StopHaptics           = 13,
 };
 
 static Service g_mc;
@@ -40,6 +42,23 @@ Result mcClearTriggerEffects(void) {
 
 Result mcGetAnalogTriggers(McAnalogTriggers *out) {
     return serviceDispatchOut(&g_mc, McCmd_GetAnalogTriggers, *out);
+}
+
+Result mcPlayHaptics(const McHapticVoice *voices, u32 count) {
+    struct {
+        McHapticVoice voices[MC_HAPTIC_VOICES_MAX];
+        u32 count;
+    } in = {0};
+    if (count > MC_HAPTIC_VOICES_MAX) {
+        count = MC_HAPTIC_VOICES_MAX;
+    }
+    memcpy(in.voices, voices, count * sizeof(McHapticVoice));
+    in.count = count;
+    return serviceDispatchIn(&g_mc, McCmd_PlayHaptics, in);
+}
+
+Result mcStopHaptics(void) {
+    return serviceDispatch(&g_mc, McCmd_StopHaptics);
 }
 
 Result mcGetHapticsStatus(McHapticsStatus *out) {
