@@ -100,8 +100,8 @@ build ID, the module's correlation search and watch logs.
 Clone with submodules (the MissionControl fork and its own `libnx` / `Atmosphere-libs` submodules):
 
 ```
-git clone --recurse-submodules https://github.com/Melnikoff07/botw-dualsense-triggers.git
-cd botw-dualsense-triggers
+git clone --recurse-submodules https://github.com/Melnikoff07/botw-dualsense-triggers-haptics.git
+cd botw-dualsense-triggers-haptics
 ```
 
 Build the toolchain image once (devkitPro devkitA64 + the libnx revision MissionControl expects), then build both parts:
