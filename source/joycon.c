@@ -8,8 +8,10 @@
 // motor: voices below 240 Hz go to the low band, the others to the high band, amplitudes add up, the frequency is the
 // amplitude-weighted mean; noise is a sine whose frequency and amplitude jitter every tick. While our voices play they
 // own the motors; when they end a zero value is sent once and the game's own rumble takes over again with its next
-// value. Nothing is sent while no voice plays. (Reading the value back to mix with the game does not work: the
-// system rounds the amplitudes, 0.6 sent reads 0.5, so our own last value looked like the game's and kept playing.)
+// value. Nothing is sent while no voice plays. The two bands of a motor add up to at most 1.0. The patterns
+// themselves are made for the Joy-Con in haptics.c (patterns-joycon.ini, or moved to the actuator's frequencies).
+// (Reading the value back to mix with the game does not work: the system rounds the amplitudes, 0.6 sent reads 0.5,
+// so our own last value looked like the game's and kept playing.)
 #include <math.h>
 #include <string.h>
 #include "joycon.h"
@@ -20,6 +22,7 @@ void LogVerbose(const char *fmt, ...);
 #define SLOTS        12
 #define TICK_MS      5
 #define LOW_SPLIT_HZ 240.0f
+#define MAX_TOTAL_AMP 1.0f
 
 typedef struct {
     bool active, noise, loop;
@@ -124,6 +127,13 @@ static bool Mix(HidVibrationValue out[2]) {
         return false;
     }
     for (int m = 0; m < 2; ++m) {
+        // Both bands drive the same actuator: their sum stays within 1.0 (the rumble table marks amplitudes above
+        // ~1.0 as not safe for the actuator)
+        float total = amp[m][0] + amp[m][1];
+        if (total > MAX_TOTAL_AMP) {
+            amp[m][0] *= MAX_TOTAL_AMP / total;
+            amp[m][1] *= MAX_TOTAL_AMP / total;
+        }
         out[m].amp_low   = Clamp(amp[m][0], 0.0f, 1.0f);
         out[m].freq_low  = amp[m][0] > 0 ? Clamp(fsum[m][0] / amp[m][0], 41.0f, 626.0f) : 160.0f;
         out[m].amp_high  = Clamp(amp[m][1], 0.0f, 1.0f);

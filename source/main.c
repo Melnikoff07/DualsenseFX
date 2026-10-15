@@ -25,6 +25,7 @@
 // The current game's profile files (none while no game with a profile runs)
 static char g_patterns_path[128];
 static char g_sounds_path[128];
+static char g_patterns_jc_path[128];
 
 #define POLL_INTERVAL_NS        (250 * 1000000ULL)
 #define ACTIVE_POLL_INTERVAL_NS (50 * 1000000ULL)  // 20 Hz while attached to the game
@@ -419,7 +420,8 @@ static bool FileChanged(WatchedFile *w) {
 static bool g_profile_builtin;  // the current game is BotW (built-in patterns)
 
 static void LoadPatternsAndRules(bool forget_names) {
-    HapticsLoadPatterns(DFX_DIR "/patterns.ini", g_patterns_path[0] ? g_patterns_path : NULL, g_profile_builtin);
+    HapticsLoadPatterns(DFX_DIR "/patterns.ini", DFX_DIR "/patterns-joycon.ini", g_patterns_path[0] ? g_patterns_path : NULL,
+                        g_patterns_jc_path[0] ? g_patterns_jc_path : NULL, g_profile_builtin);
     SoundsLoadRules(g_sounds_path[0] ? g_sounds_path : NULL, forget_names);
 }
 
@@ -448,7 +450,8 @@ static void UpdateMonitor(void) {
 static void CheckConfigChanged(void) {
     static u64 next_tick;
     static WatchedFile config = { CONFIG_PATH, 0, false }, patterns = { g_patterns_path, 0, false }, sounds = { g_sounds_path, 0, false };
-    static WatchedFile library = { DFX_DIR "/patterns.ini", 0, false };
+    static WatchedFile library = { DFX_DIR "/patterns.ini", 0, false }, library_jc = { DFX_DIR "/patterns-joycon.ini", 0, false };
+    static WatchedFile patterns_jc = { g_patterns_jc_path, 0, false };
     u64 now = armGetSystemTick();
     if (now < next_tick) {
         return;
@@ -459,14 +462,17 @@ static void CheckConfigChanged(void) {
         ReloadConfig();
     }
     bool lib = FileChanged(&library);
+    lib = FileChanged(&library_jc) || lib;
     if (g_patterns_path[0] == 0) {
-        patterns.have = sounds.have = false;    // no game: start fresh with the next one
+        patterns.have = sounds.have = patterns_jc.have = false;    // no game: start fresh with the next one
         if (lib) {
             LoadPatternsAndRules(false);
         }
         return;
     }
-    bool p = FileChanged(&patterns) || lib, r = FileChanged(&sounds);
+    bool p = FileChanged(&patterns) || lib;
+    p = FileChanged(&patterns_jc) || p;
+    bool r = FileChanged(&sounds);
     if (p || r) {
         LogLine("%s changed, reloading", p ? "patterns.ini" : "sounds.ini");
         LoadPatternsAndRules(r);
@@ -647,7 +653,7 @@ static void Update(GameSession *s) {
         ProfileSetCurrent(NULL);
         remove(DFX_DIR "/sound_status.txt");
         SoundsConfigure(0, 0, 0, 0, 0, false);
-        g_patterns_path[0] = g_sounds_path[0] = 0;
+        g_patterns_path[0] = g_sounds_path[0] = g_patterns_jc_path[0] = 0;
         LoadPatternsAndRules(true);
     }
 
@@ -665,6 +671,7 @@ static void Update(GameSession *s) {
         ProfilePath(&s->profile, "patterns.ini", g_patterns_path, sizeof(g_patterns_path));
         g_profile_builtin = s->profile.program_id == BOTW_PROGRAM_ID;
         ProfilePath(&s->profile, "sounds.ini", g_sounds_path, sizeof(g_sounds_path));
+        ProfilePath(&s->profile, "patterns-joycon.ini", g_patterns_jc_path, sizeof(g_patterns_jc_path));
         LoadPatternsAndRules(true);
         s->state = SessionState_Attaching;
         s->pid = pid;

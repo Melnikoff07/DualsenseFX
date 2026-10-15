@@ -1,6 +1,6 @@
-// DualsenseFX: Tesla / Ultrahand overlay for the adaptive_triggers settings.
-// It only edits files in sdmc:/config/dualsensefx (config.ini, the games' game.ini and patterns.ini); the sysmodule
-// notices the change and applies it within a second, no reboot needed.
+// DualsenseFX: Tesla / Ultrahand overlay for the DualsenseFX settings.
+// It only edits files in sdmc:/config/dualsensefx (config.ini and the games' patterns.ini); the sysmodule notices the
+// change and applies it within a second, no reboot needed.
 #define TESLA_INIT_IMPL
 #include <tesla.hpp>
 
@@ -8,7 +8,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <dirent.h>
-#include <sys/stat.h>
 #include <string>
 #include <vector>
 
@@ -176,256 +175,53 @@ std::string GameDir(const std::string &id) {
     return std::string(GamesDir) + "/" + id;
 }
 
-// The game's title from its control data (falls back to the program id)
-std::string GameTitle(const std::string &id) {
-    std::string title = id;
-    if (R_FAILED(nsInitialize())) {
-        return title;
-    }
-    auto *data = new NsApplicationControlData;
-    u64 size = 0;
-    if (R_SUCCEEDED(nsGetApplicationControlData(NsApplicationControlSource_Storage, std::strtoull(id.c_str(), nullptr, 16),
-                                                data, sizeof(*data), &size))) {
-        NacpLanguageEntry *lang = nullptr;
-        if (R_SUCCEEDED(nacpGetLanguageEntry(&data->nacp, &lang)) && lang && lang->name[0]) {
-            title = lang->name;
-        }
-    }
-    delete data;
-    nsExit();
-    return title;
-}
-
-// A new profile: the module attaches within a few seconds (after its usual 30 s wait) and finds the sounds itself
-bool CreateProfile(const std::string &id) {
-    mkdir(GamesDir, 0777);
-    mkdir(GameDir(id).c_str(), 0777);
-    FILE *f = std::fopen((GameDir(id) + "/game.ini").c_str(), "w");
-    if (f == nullptr) {
-        return false;
-    }
-    std::fprintf(f, "; DualsenseFX game profile, created from the overlay\nname = %s\nenabled = 1\n"
-                    "; Empty: any build. The nn::atk sound pool is looked for automatically and written below.\nbuilds =\n",
-                 GameTitle(id).c_str());
-    std::fclose(f);
-    return true;
-}
-
-constexpr const char *MonitorOn   = "sdmc:/config/dualsensefx/monitor.on";
-constexpr const char *MonitorFile = "sdmc:/config/dualsensefx/monitor.txt";
-constexpr const char *LibraryPath = "sdmc:/config/dualsensefx/patterns.ini";
-
-// Section names of a patterns file
-std::vector<std::string> PatternNames(const std::string &path) {
-    std::vector<std::string> names;
-    FILE *f = std::fopen(path.c_str(), "r");
-    if (f == nullptr) {
-        return names;
-    }
-    char buf[256];
-    while (std::fgets(buf, sizeof(buf), f)) {
-        std::string l(buf);
-        size_t b = l.find_first_not_of(" \t");
-        if (b != std::string::npos && l[b] == '[') {
-            size_t e = l.find(']', b);
-            std::string n = l.substr(b + 1, e == std::string::npos ? std::string::npos : e - b - 1);
-            if (n.rfind("step ", 0) != 0) {
-                names.push_back(n);
-            }
-        }
-    }
-    std::fclose(f);
-    return names;
-}
-
-// Puts "name = action" first in the game's sounds.ini (the first matching rule wins), replacing an older rule for it
-void AssignSound(const std::string &id, const std::string &name, const std::string &action) {
-    std::string path = GameDir(id) + "/sounds.ini";
-    std::vector<std::string> lines;
-    FILE *f = std::fopen(path.c_str(), "r");
-    if (f) {
-        char buf[256];
-        while (std::fgets(buf, sizeof(buf), f)) {
-            std::string l(buf);
-            l.erase(l.find_last_not_of("\r\n") + 1);
-            size_t eq = l.find('=');
-            if (eq != std::string::npos && l[0] != ';') {
-                std::string mask = l.substr(0, eq);
-                mask.erase(mask.find_last_not_of(" \t") + 1);
-                if (mask == name) {
-                    continue;
-                }
-            }
-            lines.push_back(l);
-        }
-        std::fclose(f);
-    }
-    size_t at = 0;
-    while (at < lines.size() && (lines[at].empty() || lines[at][0] == ';')) {
-        ++at;
-    }
-    lines.insert(lines.begin() + at, name + " = " + action);
-    std::string tmp = path + ".tmp";
-    FILE *o = std::fopen(tmp.c_str(), "w");
-    if (o == nullptr) {
-        return;
-    }
-    for (const auto &l : lines) {
-        std::fputs(l.c_str(), o);
-        std::fputc('\n', o);
-    }
-    std::fclose(o);
-    std::remove(path.c_str());
-    std::rename(tmp.c_str(), path.c_str());
-}
-
-// What a monitored sound should play
-class AssignGui : public tsl::Gui {
-public:
-    AssignGui(std::string id, std::string name) : m_id(std::move(id)), m_name(std::move(name)) {}
-
-    tsl::elm::Element *createUI() override {
-        auto *frame = new tsl::elm::OverlayFrame("DualsenseFX", m_name);
-        auto *list = new tsl::elm::List();
-        auto add = [&](const std::string &label, const std::string &action) {
-            auto *item = new tsl::elm::ListItem(label);
-            std::string id = m_id, name = m_name;
-            // No goBack() here: it would delete this page while its handler runs (B goes back safely)
-            item->setClickListener([item, label, id, name, action](u64 keys) {
-                if (keys & HidNpadButton_A) {
-                    AssignSound(id, name, action);
-                    item->setText("\u2713 " + label + " (saved, B to go back)");
-                    return true;
-                }
-                return false;
-            });
-            list->addItem(item);
-        };
-        list->addItem(new tsl::elm::CategoryHeader("Play"));
-        add("Nothing (ignore)", "ignore");
-        add("Footstep (ground from the name)", "step");
-        list->addItem(new tsl::elm::CategoryHeader("Library"));
-        for (const auto &n : PatternNames(LibraryPath)) {
-            add(n, n);
-        }
-        auto own = PatternNames(GameDir(m_id) + "/patterns.ini");
-        if (!own.empty()) {
-            list->addItem(new tsl::elm::CategoryHeader("This game's patterns"));
-            for (const auto &n : own) {
-                add(n, n);
-            }
-        }
-        frame->setContent(list);
-        return frame;
-    }
-
-private:
-    std::string m_id, m_name;
+// The installed game profiles (a folder in config/dualsensefx/games with a game.ini)
+struct GameEntry {
+    std::string id, name;
 };
 
-bool Recording() {
-    struct stat st;
-    return stat(MonitorOn, &st) == 0;
+std::vector<GameEntry> InstalledGames() {
+    std::vector<GameEntry> games;
+    DIR *dir = opendir(GamesDir);
+    if (dir == nullptr) {
+        return games;
+    }
+    while (struct dirent *e = readdir(dir)) {
+        if (e->d_name[0] == '.') {
+            continue;
+        }
+        Config game;
+        game.load(GameDir(e->d_name) + "/game.ini");
+        if (game.loaded()) {
+            games.push_back({ e->d_name, game.getString("name", e->d_name) });
+        }
+    }
+    closedir(dir);
+    return games;
 }
 
-void SetRecording(bool on) {
-    if (on) {
-        if (FILE *f = std::fopen(MonitorOn, "w")) {
-            std::fclose(f);
+// The game whose events the per-event sliders show: the running one if it has a profile, else BotW, until picked
+GameEntry g_game;
+
+void PickDefaultGame() {
+    CurrentGame running = ReadCurrentGame();
+    std::string want = running.has_profile ? running.id : DefaultGame;
+    auto games = InstalledGames();
+    g_game = { DefaultGame, "Zelda: Breath of the Wild" };
+    for (const auto &g : games) {
+        if (g.id == want) {
+            g_game = g;
+            return;
         }
-    } else {
-        std::remove(MonitorOn);
+    }
+    if (!games.empty()) {
+        g_game = games.front();
     }
 }
 
-// The recorded sounds as they were when the page opened (nothing moves), newest first, with how long ago they played.
-// Refresh and the filter only swap the rows below them: the list removes and adds items between frames, so the
-// element whose handler runs is never deleted under it (rebuilding the whole page from its handler crashed).
-class RecordedGui : public tsl::Gui {
-public:
-    explicit RecordedGui(std::string id) : m_id(std::move(id)) {}
-
-    tsl::elm::Element *createUI() override {
-        auto *frame = new tsl::elm::OverlayFrame("DualsenseFX", Recording() ? "Recorded sounds (recording)" : "Recorded sounds");
-        m_list = new tsl::elm::List();
-
-        auto *refresh = new tsl::elm::ListItem("Refresh", "↻");
-        refresh->setClickListener([this](u64 keys) {
-            if (keys & HidNpadButton_A) {
-                fill();
-                return true;
-            }
-            return false;
-        });
-        m_list->addItem(refresh);
-        auto *filter = new tsl::elm::ToggleListItem("Only sounds without an effect", m_unassigned_only);
-        filter->setStateChangedListener([this](bool state) {
-            m_unassigned_only = state;
-            fill();
-        });
-        m_list->addItem(filter);
-        fill();
-        frame->setContent(m_list);
-        return frame;
-    }
-
-private:
-    std::string m_id;
-    bool m_unassigned_only = false;
-    tsl::elm::List *m_list = nullptr;
-    std::vector<tsl::elm::Element *> m_rows;
-
-    void fill() {
-        for (auto *row : m_rows) {
-            m_list->removeItem(row);
-        }
-        m_rows.clear();
-        FILE *f = std::fopen(MonitorFile, "r");
-        if (f != nullptr) {
-            u64 now = armGetSystemTick(), freq = armGetSystemTickFreq();
-            char buf[256];
-            while (m_rows.size() < 120 && std::fgets(buf, sizeof(buf), f)) {
-                std::string l(buf);
-                l.erase(l.find_last_not_of("\r\n") + 1);
-                size_t t1 = l.find('\t'), t2 = l.find('\t', t1 + 1), t3 = l.find('\t', t2 + 1);
-                if (t1 == std::string::npos || t2 == std::string::npos || t3 == std::string::npos) {
-                    continue;
-                }
-                u64 tick = std::strtoull(l.substr(t1 + 1, t2 - t1 - 1).c_str(), nullptr, 10);
-                std::string name = l.substr(t2 + 1, t3 - t2 - 1), action = l.substr(t3 + 1);
-                bool assigned = action != "-";
-                if (m_unassigned_only && assigned) {
-                    continue;
-                }
-                u64 ago = tick && now > tick ? (now - tick) / freq : 0;
-                std::string when = ago < 60 ? std::to_string(ago) + "s" : ago < 3600 ? std::to_string(ago / 60) + "m" : ">1h";
-                auto *item = new tsl::elm::ListItem(name);
-                item->setValue((assigned ? "✓ " : "") + when, assigned);
-                std::string id = m_id;
-                item->setClickListener([id, name](u64 keys) {
-                    if (keys & HidNpadButton_A) {
-                        tsl::changeTo<AssignGui>(id, name);
-                        return true;
-                    }
-                    return false;
-                });
-                m_list->addItem(item);
-                m_rows.push_back(item);
-            }
-            std::fclose(f);
-        }
-        if (m_rows.empty()) {
-            auto *hint = new tsl::elm::CategoryHeader(Recording() ? "Nothing yet: play a bit, then Refresh" :
-                                                      "Turn on Record sounds, play, then come back", true);
-            m_list->addItem(hint);
-            m_rows.push_back(hint);
-        }
-    }
-};
-
-// Per-event sliders edit the running game's patterns.ini, or BotW's while no game runs
-std::string PatternsPathFor(const std::string &id) {
-    return std::string(GamesDir) + "/" + (id.empty() ? DefaultGame : id) + "/patterns.ini";
+// Per-event sliders edit the picked game's patterns.ini (the strength applies to the DualSense and the Joy-Con set)
+std::string PatternsPath() {
+    return GameDir(g_game.id) + "/patterns.ini";
 }
 
 // patterns.ini sections and their per-pattern "strength =" lines (the module applies them within a second)
@@ -549,9 +345,8 @@ public:
     GroupGui(std::string group, std::string title) : m_group(std::move(group)), m_title(std::move(title)) {}
 
     tsl::elm::Element *createUI() override {
-        CurrentGame game = ReadCurrentGame();
-        g_patterns.load(PatternsPathFor(game.id));
-        auto *frame = new tsl::elm::OverlayFrame("DualsenseFX", m_title + (game.name.empty() ? "" : " \u2022 " + game.name));
+        g_patterns.load(PatternsPath());
+        auto *frame = new tsl::elm::OverlayFrame("DualsenseFX", m_title + " \u2022 " + g_game.name);
         auto *list = new tsl::elm::List();
         for (const auto &s : g_patterns.sections) {
             if (s.group != m_group) {
@@ -573,39 +368,35 @@ private:
     std::string m_group, m_title;
 };
 
-// The installed game profiles, each can be turned off (enabled = in its game.ini)
+// Picks the game for the per-event sliders. Only the marks change here (a page must not delete itself from a handler),
+// B goes back.
 class GamesGui : public tsl::Gui {
 public:
     tsl::elm::Element *createUI() override {
-        auto *frame = new tsl::elm::OverlayFrame("DualsenseFX", "Games");
+        auto *frame = new tsl::elm::OverlayFrame("DualsenseFX", "Game");
         auto *list = new tsl::elm::List();
-        DIR *dir = opendir(GamesDir);
-        if (dir != nullptr) {
-            while (struct dirent *e = readdir(dir)) {
-                if (e->d_name[0] == '.') {
-                    continue;
+        for (const auto &g : InstalledGames()) {
+            auto *item = new tsl::elm::ListItem(g.name, g.id == g_game.id ? "\u2713" : "");
+            m_items.push_back({ item, g });
+            item->setClickListener([this, g](u64 keys) {
+                if (keys & HidNpadButton_A) {
+                    g_game = g;
+                    for (auto &it : m_items) {
+                        it.first->setValue(it.second.id == g_game.id ? "\u2713" : "");
+                    }
+                    return true;
                 }
-                std::string ini = std::string(GamesDir) + "/" + e->d_name + "/game.ini";
-                Config game;
-                game.load(ini);
-                if (!game.loaded()) {
-                    continue;
-                }
-                std::string name = game.getString("name", e->d_name);
-                auto *toggle = new tsl::elm::ToggleListItem(name, game.get("enabled", 1) != 0);
-                toggle->setStateChangedListener([ini](bool state) {
-                    Config g;
-                    g.load(ini);
-                    g.set("enabled", state ? 1 : 0);
-                });
-                list->addItem(toggle);
-            }
-            closedir(dir);
+                return false;
+            });
+            list->addItem(item);
         }
-        list->addItem(new tsl::elm::CategoryHeader("A game is used when its folder in config/dualsensefx/games has a game.ini", true));
+        list->addItem(new tsl::elm::CategoryHeader("More games will come as profiles in config/dualsensefx/games", true));
         frame->setContent(list);
         return frame;
     }
+
+private:
+    std::vector<std::pair<tsl::elm::ListItem *, GameEntry>> m_items;
 };
 
 // A header with the setting's name and a slider with Off / 25% ... 200%
@@ -644,62 +435,21 @@ class MainGui : public tsl::Gui {
 public:
     tsl::elm::Element *createUI() override {
         g_config.load();
-        CurrentGame game = ReadCurrentGame();
-        auto *frame = new tsl::elm::OverlayFrame("DualsenseFX", game.id.empty() ? "No game running" :
-                                                  game.has_profile ? game.name : "This game has no profile");
+        CurrentGame running = ReadCurrentGame();
+        auto *frame = new tsl::elm::OverlayFrame("DualsenseFX", running.has_profile ? running.name : "No supported game running");
         auto *list = new tsl::elm::List();
 
-        if (!game.id.empty() && !game.has_profile) {
-            auto *create = new tsl::elm::ListItem("Create a profile for this game", "\u203A");
-            std::string id = game.id;
-            create->setClickListener([create, id](u64 keys) {
-                if (keys & HidNpadButton_A) {
-                    create->setText(CreateProfile(id) ? "Created: starts in about 30 s" : "Could not create the profile");
-                    return true;
-                }
-                return false;
-            });
-            list->addItem(create);
-        }
-        if (game.has_profile) {
-            std::string status = "unknown";
-            if (FILE *sf = std::fopen("sdmc:/config/dualsensefx/sound_status.txt", "r")) {
-                char sb[64] = {0};
-                if (std::fgets(sb, sizeof(sb), sf)) {
-                    status = sb;
-                    status.erase(status.find_last_not_of("\r\n ") + 1);
-                }
-                std::fclose(sf);
-            }
-            std::string header = status == "active" ? "Sounds of this game (found)" :
-                                 status == "searching" ? "Sounds of this game (looking...)" :
-                                 status == "not supported" ? "Sounds: this game has its own audio engine, not supported yet" :
-                                 "Sounds of this game";
-            list->addItem(new tsl::elm::CategoryHeader(header));
-            auto *record = new tsl::elm::ToggleListItem("Record sounds", Recording());
-            record->setStateChangedListener([](bool state) { SetRecording(state); });
-            list->addItem(record);
-            auto *recorded = new tsl::elm::ListItem("Recorded sounds", "\u203A");
-            std::string id = game.id;
-            recorded->setClickListener([id](u64 keys) {
-                if (keys & HidNpadButton_A) {
-                    tsl::changeTo<RecordedGui>(id);
-                    return true;
-                }
-                return false;
-            });
-            list->addItem(recorded);
-        }
-
-        auto *games = new tsl::elm::ListItem("Games", "\u203A");
-        games->setClickListener([](u64 keys) {
+        list->addItem(new tsl::elm::CategoryHeader("Game"));
+        m_game = new tsl::elm::ListItem(g_game.name, "\u203A");
+        m_game->setClickListener([](u64 keys) {
             if (keys & HidNpadButton_A) {
                 tsl::changeTo<GamesGui>();
                 return true;
             }
             return false;
         });
-        list->addItem(games);
+        list->addItem(m_game);
+        m_shown = g_game.id;
 
         list->addItem(new tsl::elm::CategoryHeader("Output"));
         auto *output = new tsl::elm::NamedStepTrackBar("↔", { "Off", "DualSense", "Joy-Con" });
@@ -722,6 +472,18 @@ public:
         frame->setContent(list);
         return frame;
     }
+
+    // Back from the Game page: show the new pick
+    void update() override {
+        if (m_game != nullptr && m_shown != g_game.id) {
+            m_game->setText(g_game.name);
+            m_shown = g_game.id;
+        }
+    }
+
+private:
+    tsl::elm::ListItem *m_game = nullptr;
+    std::string m_shown;
 };
 
 class DualSenseFx : public tsl::Overlay {
@@ -729,9 +491,10 @@ public:
     void initServices() override {
         fsdevMountSdmc();   // stdio access to the SD card (harmless if already mounted)
     }
-    void exitServices() override {}     // recording goes on while the overlay is closed
+    void exitServices() override {}
 
     std::unique_ptr<tsl::Gui> loadInitialGui() override {
+        PickDefaultGame();
         return initially<MainGui>();
     }
 };

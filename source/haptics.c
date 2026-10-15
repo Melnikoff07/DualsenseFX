@@ -2,6 +2,7 @@
 // an attack / hold / decay envelope) that MissionControl synthesises on the DualSense voice coils and mixes with the
 // game's own rumble. Left/right amplitudes put an effect in the hand that would feel it: the weapon hand is the right
 // one, the shield and the bow are held in the left.
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -266,6 +267,10 @@ typedef struct {
     u8 strength;            // percent, set per pattern from the overlay (strength = in patterns.ini)
     u32 count;
     VoiceDef voices[MC_HAPTIC_VOICES_MAX];
+    // The Joy-Con version: from patterns-joycon.ini, else made from the DualSense voices (JoyConVoice)
+    bool jc_custom;
+    u32 jc_count;
+    VoiceDef jc_voices[MC_HAPTIC_VOICES_MAX];
 } Pattern;
 
 static Pattern g_patterns[HAPTIC_PATTERN_IDS];  // built-in ids first, then the ones patterns.ini adds
@@ -280,12 +285,77 @@ static const char *StepNames[STEP_MATERIALS] = {
 };
 static const char *GroupNames[HapticGroup_Count] = { "combat", "body", "runes", "world", "footsteps" };
 
+// ---- Joy-Con versions ----
+// The DualSense has voice coils with a real mass behind them: 25-80 Hz feels deep and heavy, low-passed noise feels
+// like texture. A Joy-Con (and a Pro Controller) has one small linear resonant actuator per hand, driven with two
+// sines at once (a low and a high band). It only shakes hard around its resonances, about 160 Hz and 320 Hz (SDL:
+// "a fairly narrow frequency range around 100-250Hz that really shakes the controller, everything else is quite
+// weak"); 40-60 Hz, the heart of the DualSense patterns, is barely felt. Amplitude and frequency change in 5 ms
+// steps at best, so very short voices can fall between two updates. What a Joy-Con does very well: short crisp
+// clicks near 320 Hz and punchy knocks near 160 Hz.
+// So when a pattern has no hand-made Joy-Con version, its voices are moved where the actuator answers: deep
+// frequencies into 100-160 Hz (sweeps keep their direction), very high ones pulled down towards 600-900 Hz, quiet
+// voices lifted a little (small amplitudes are rounded away), and every voice lasts at least 15 ms.
+static u16 JoyConFreq(u16 f) {
+    if (f <= 40) {
+        return 100;
+    }
+    if (f < 120) {
+        return (u16)(100 + (f - 40) * 3 / 4);
+    }
+    if (f > 600) {
+        u32 v = 600 + (f - 600) / 4;
+        return (u16)(v > 900 ? 900 : v);
+    }
+    return f;
+}
+
+static u8 JoyConAmp(u8 a) {
+    if (a == 0) {
+        return 0;
+    }
+    float v = powf(a / 255.0f, 0.8f) * 255.0f;
+    return v > 255.0f ? 255 : (u8)v;
+}
+
+static VoiceDef JoyConVoice(VoiceDef d) {
+    d.freq_start = JoyConFreq(d.freq_start);
+    d.freq_end = JoyConFreq(d.freq_end);
+    d.left = JoyConAmp(d.left);
+    d.right = JoyConAmp(d.right);
+    if (d.attack + d.hold < 15) {
+        d.hold = 15 - d.attack;
+    }
+    return d;
+}
+
+static void MakeJoyConVersion(Pattern *p) {
+    if (p->jc_custom) {
+        return;
+    }
+    p->jc_count = p->count;
+    for (u32 i = 0; i < p->count; ++i) {
+        p->jc_voices[i] = JoyConVoice(p->voices[i]);
+    }
+}
+
+// The voices for the current output
+static const VoiceDef *VoicesFor(const Pattern *p, u32 *count) {
+    if (g_haptic_settings.output == HapticOutput_JoyCon) {
+        *count = p->jc_count;
+        return p->jc_voices;
+    }
+    *count = p->count;
+    return p->voices;
+}
+
 static void SetPattern(Pattern *p, const char *name, u8 group, u32 count, const VoiceDef *voices) {
     snprintf(p->name, sizeof(p->name), "%s", name);
     p->group = group;
     p->strength = 100;
     p->count = count;
     memcpy(p->voices, voices, sizeof(VoiceDef) * count);
+    p->jc_custom = false;
 }
 
 static void ResetPatterns(void) {
@@ -421,8 +491,9 @@ static void WriteText(const char *path, const char *text) {
     }
 }
 
-// One patterns file on top of what is loaded already; false if it is missing
-static bool ParsePatternFile(const char *path) {
+// One patterns file on top of what is loaded already; false if it is missing. A Joy-Con file (patterns-joycon.ini)
+// only sets the Joy-Con voices of its sections; group and strength always come from patterns.ini.
+static bool ParsePatternFile(const char *path, bool joycon) {
     FILE *f = fopen(path, "r");
     if (f == NULL) {
         return false;
@@ -459,15 +530,19 @@ static bool ParsePatternFile(const char *path) {
         unsigned l, r, f0, f1, dl, at, ho, de;
         char gname[16];
         if (sscanf(line, "voice = %7s %u %u %u %u %u %u %u %u", type, &l, &r, &f0, &f1, &dl, &at, &ho, &de) == 9) {
+            u32 *count = joycon ? &cur->jc_count : &cur->count;
             if (!voices_started) {
-                cur->count = 0;
+                *count = 0;
                 voices_started = true;
+                cur->jc_custom |= joycon;
             }
-            if (cur->count < MC_HAPTIC_VOICES_MAX && (loop ? cur->count < 2 : true)) {
-                cur->voices[cur->count++] = (VoiceDef){
+            if (*count < MC_HAPTIC_VOICES_MAX && (loop ? *count < 2 : true)) {
+                (joycon ? cur->jc_voices : cur->voices)[(*count)++] = (VoiceDef){
                     (u8)((strcmp(type, "noise") == 0 ? NOISE : 0) | (loop ? LOOP : 0)),
                     (u8)(l > 255 ? 255 : l), (u8)(r > 255 ? 255 : r), (u16)f0, (u16)f1, (u16)dl, (u16)at, (u16)ho, (u16)de };
             }
+        } else if (joycon && (strncmp(line, "strength", 8) == 0 || strncmp(line, "group", 5) == 0)) {
+            continue;
         } else if (sscanf(line, "strength = %u", &l) == 1) {
             cur->strength = l > 200 ? 200 : l;
         } else if (sscanf(line, "group = %15s", gname) == 1) {
@@ -485,13 +560,20 @@ static bool ParsePatternFile(const char *path) {
     return true;
 }
 
-void HapticsLoadPatterns(const char *library, const char *profile, bool builtin_profile) {
+static const char *JoyConHeader =
+    "; Joy-Con / Pro Controller versions of the patterns, used while output=2. Same sections and voice lines as\n"
+    "; patterns.ini; a pattern missing here is made from its DualSense voices automatically (moved to the frequencies\n"
+    "; the Joy-Con actuator answers to: low band ~100-250 Hz, best near 160 Hz; high band best near 320 Hz).\n"
+    "; group and strength come from patterns.ini, so the overlay's sliders work for both. Applied within a second.\n";
+
+void HapticsLoadPatterns(const char *library, const char *library_jc, const char *profile, const char *profile_jc,
+                         bool builtin_profile) {
     ResetPatterns();
-    if (library && !ParsePatternFile(library)) {
+    if (library && !ParsePatternFile(library, false)) {
         WriteText(library, LibraryDefaults);
-        ParsePatternFile(library);
+        ParsePatternFile(library, false);
     }
-    if (profile && !ParsePatternFile(profile)) {
+    if (profile && !ParsePatternFile(profile, false)) {
         // BotW's patterns are built in and written out in full; other games start with an empty file
         if (builtin_profile) {
             WriteDefaults(profile);
@@ -499,6 +581,21 @@ void HapticsLoadPatterns(const char *library, const char *profile, bool builtin_
             WriteText(profile, "; Patterns of this game: change library patterns for it or add new ones, same format as\n"
                                "; config/dualsensefx/patterns.ini. strength = 0-200 scales one pattern.\n");
         }
+    }
+    if (library_jc && !ParsePatternFile(library_jc, true)) {
+        WriteText(library_jc, JoyConHeader);
+    }
+    if (profile_jc && !ParsePatternFile(profile_jc, true)) {
+        WriteText(profile_jc, JoyConHeader);
+    }
+    for (u32 i = 0; i < g_num_patterns; ++i) {
+        MakeJoyConVersion(&g_patterns[i]);
+    }
+    for (u32 i = 0; i < HapticLoop_Count; ++i) {
+        MakeJoyConVersion(&g_loops[i]);
+    }
+    for (u32 i = 0; i < STEP_MATERIALS; ++i) {
+        MakeJoyConVersion(&g_steps[i]);
     }
 }
 
@@ -544,11 +641,16 @@ const char *HapticsPatternName(u32 pattern) {
 }
 
 void HapticsPlay(u32 pattern, float amount) {
-    if (!g_available || !g_haptic_settings.enabled || pattern >= g_num_patterns || g_patterns[pattern].count == 0) {
+    if (!g_available || !g_haptic_settings.enabled || pattern >= g_num_patterns) {
         return;
     }
 
     const Pattern *p = &g_patterns[pattern];
+    u32 count;
+    const VoiceDef *defs = VoicesFor(p, &count);
+    if (count == 0) {
+        return;
+    }
     float factor = 1.0f;
     if (pattern == HapticPattern_Damage || pattern == HapticPattern_Landing) {
         factor = amount < 0.3f ? 0.3f : amount > 1.0f ? 1.0f : amount;
@@ -562,11 +664,11 @@ void HapticsPlay(u32 pattern, float amount) {
     factor *= group / 100.0f * p->strength / 100.0f;
 
     McHapticVoice voices[MC_HAPTIC_VOICES_MAX];
-    for (u32 i = 0; i < p->count; ++i) {
-        voices[i] = MakeVoice(&p->voices[i], g_next_slot, factor);
+    for (u32 i = 0; i < count; ++i) {
+        voices[i] = MakeVoice(&defs[i], g_next_slot, factor);
         g_next_slot = g_next_slot + 1 >= SLOT_COUNT ? FIRST_ONESHOT_SLOT : g_next_slot + 1;
     }
-    Result rc = Send(voices, p->count);
+    Result rc = Send(voices, count);
     LogVerbose("haptics: %s%s", p->name, R_FAILED(rc) ? " (failed)" : "");
 }
 
@@ -576,19 +678,21 @@ void HapticsPlayStep(u32 material, bool left, float amount) {
         return;
     }
     const Pattern *s = material < STEP_MATERIALS && g_steps[material].count ? &g_steps[material] : &g_steps[1];
-    if (s->strength == 0) {
+    u32 count;
+    const VoiceDef *defs = VoicesFor(s, &count);
+    if (s->strength == 0 || count == 0) {
         return;
     }
     amount *= s->strength / 100.0f;
     McHapticVoice voices[MC_HAPTIC_VOICES_MAX];
-    for (u32 i = 0; i < s->count; ++i) {
-        voices[i] = MakeVoice(&s->voices[i], g_next_slot, amount * group / 100.0f);
+    for (u32 i = 0; i < count; ++i) {
+        voices[i] = MakeVoice(&defs[i], g_next_slot, amount * group / 100.0f);
         // The other hand gets a softer copy, steps alternate between the hands
         u8 *soft = left ? &voices[i].amp_right : &voices[i].amp_left;
         *soft = *soft * 6 / 10;
         g_next_slot = g_next_slot + 1 >= SLOT_COUNT ? FIRST_ONESHOT_SLOT : g_next_slot + 1;
     }
-    Send(voices, s->count);
+    Send(voices, count);
 }
 
 void HapticsSetLoop(HapticLoop loop, bool on) {
@@ -601,16 +705,21 @@ void HapticsSetLoop(HapticLoop loop, bool on) {
         return;
     }
 
+    u32 count;
+    const VoiceDef *defs = VoicesFor(l, &count);
     McHapticVoice voices[MC_HAPTIC_VOICES_MAX];
-    for (u32 i = 0; i < l->count; ++i) {
+    for (u32 i = 0; i < count && i < 2; ++i) {
         // Off: amplitude 0 stops the slot
-        voices[i] = MakeVoice(&l->voices[i], DefaultLoops[loop].slots[i],
+        voices[i] = MakeVoice(&defs[i], DefaultLoops[loop].slots[i],
                               on ? g_haptic_settings.group[l->group] / 100.0f * l->strength / 100.0f : 0.0f);
         if (!on) {
             voices[i].amp_left = voices[i].amp_right = 0;
         }
     }
-    if (R_SUCCEEDED(Send(voices, l->count))) {
+    if (count > 2) {
+        count = 2;
+    }
+    if (R_SUCCEEDED(Send(voices, count))) {
         g_loop_on[loop] = on;
     }
 }

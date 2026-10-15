@@ -103,6 +103,9 @@ void HapticsStopAll(void);
 const char *HapticsPatternName(u32 pattern);
 
 // Built-in patterns, then the library (config/dualsensefx/patterns.ini), then the game's patterns.ini; missing files
-// are written with their defaults (builtin_profile: the game is BotW, whose patterns are built in)
-void HapticsLoadPatterns(const char *library, const char *profile, bool builtin_profile);
+// are written with their defaults (builtin_profile: the game is BotW, whose patterns are built in). The two
+// patterns-joycon.ini files give the Joy-Con versions; the others are made from the DualSense voices. Both sets stay
+// loaded, the output picks one when a pattern plays.
+void HapticsLoadPatterns(const char *library, const char *library_jc, const char *profile, const char *profile_jc,
+                         bool builtin_profile);
 int HapticsFindPattern(const char *name);       // -1 if there is no such pattern
