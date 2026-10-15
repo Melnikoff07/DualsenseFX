@@ -8,14 +8,85 @@
   swnet.py put <local> <remote>          upload a project file (checked with CRC32)
 
 Settings: SWNET_TOKEN (the net_token from config.ini), SWNET_HOST (skips discovery), SWNET_PORT (default 7330).
+Without them: ~/.config/dualsensefx/net-token holds the token and ~/.config/dualsensefx/console the last address
+(host=...). If that address doesn't answer: UDP discovery, then a scan of the local /24 network for the port; the
+address found is remembered.
 Also usable as a module: Switch().cmd("info"), .read("player+C40", 4), ...
 """
+import concurrent.futures
 import os
 import socket
 import sys
 import zlib
 
 PORT = int(os.environ.get("SWNET_PORT", "7330"))
+CONF_DIR = os.path.expanduser("~/.config/dualsensefx")
+
+
+def _conf(name):
+    try:
+        with open(os.path.join(CONF_DIR, name)) as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def remembered_host():
+    text = _conf("console") or ""
+    for line in text.splitlines():
+        if line.startswith("host="):
+            return line[5:].strip()
+    return None
+
+
+def remember_host(host):
+    try:
+        os.makedirs(CONF_DIR, exist_ok=True)
+        with open(os.path.join(CONF_DIR, "console"), "w") as f:
+            f.write(f"host={host}\nport={PORT}\n")
+    except OSError:
+        pass
+
+
+def port_open(host, timeout=0.6):
+    s = socket.socket()
+    s.settimeout(timeout)
+    try:
+        s.connect((host, PORT))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def scan_subnet():
+    """The console on the local /24 network (UDP discovery does not reach every computer)"""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("192.0.2.1", 9))     # no traffic: only picks the outgoing interface
+        mine = probe.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        probe.close()
+    prefix = mine.rsplit(".", 1)[0]
+    hosts = [f"{prefix}.{i}" for i in range(1, 255) if f"{prefix}.{i}" != mine]
+    with concurrent.futures.ThreadPoolExecutor(64) as ex:
+        for host, ok in zip(hosts, ex.map(port_open, hosts)):
+            if ok:
+                return host
+    return None
+
+
+def find_console():
+    host = remembered_host()
+    if host and port_open(host, 1.5):
+        return host
+    host = discover() or scan_subnet()
+    if host:
+        remember_host(host)
+    return host
 
 
 def discover(timeout=2.0):
@@ -34,12 +105,12 @@ def discover(timeout=2.0):
 
 class Switch:
     def __init__(self, host=None, token=None, timeout=10.0):
-        host = host or os.environ.get("SWNET_HOST") or discover()
-        token = token or os.environ.get("SWNET_TOKEN")
+        host = host or os.environ.get("SWNET_HOST") or find_console()
+        token = token or os.environ.get("SWNET_TOKEN") or _conf("net-token")
         if not host:
             raise SystemExit("console not found (is net=1 set and the console on the same Wi-Fi?)")
         if not token:
-            raise SystemExit("set SWNET_TOKEN to net_token from config.ini")
+            raise SystemExit("set SWNET_TOKEN to net_token from config.ini (or put it in ~/.config/dualsensefx/net-token)")
         self.host = host
         self.sock = socket.create_connection((host, PORT), timeout=timeout)
         self.file = self.sock.makefile("rb")
@@ -106,7 +177,7 @@ def main(argv):
         return 1
     what = argv[1]
     if what == "discover":
-        host = discover()
+        host = find_console()
         print(host or "not found")
         return 0 if host else 1
     sw = Switch()
