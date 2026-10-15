@@ -263,6 +263,7 @@ static u32 g_next_slot = FIRST_ONESHOT_SLOT;
 typedef struct {
     char name[32];
     u8 group;
+    u8 strength;            // percent, set per pattern from the overlay (strength = in patterns.ini)
     u32 count;
     VoiceDef voices[MC_HAPTIC_VOICES_MAX];
 } Pattern;
@@ -282,6 +283,7 @@ static const char *GroupNames[HapticGroup_Count] = { "combat", "body", "runes", 
 static void SetPattern(Pattern *p, const char *name, u8 group, u32 count, const VoiceDef *voices) {
     snprintf(p->name, sizeof(p->name), "%s", name);
     p->group = group;
+    p->strength = 100;
     p->count = count;
     memcpy(p->voices, voices, sizeof(VoiceDef) * count);
 }
@@ -348,6 +350,7 @@ static Pattern *SectionFor(const char *name, bool *loop) {
     memset(p, 0, sizeof(*p));
     snprintf(p->name, sizeof(p->name), "%.31s", name);
     p->group = HapticGroup_World;
+    p->strength = 100;
     return p;
 }
 
@@ -367,6 +370,7 @@ static void WriteDefaults(const char *path) {
     fputs("; Haptic patterns, applied within a second after saving (no reboot).\n"
           "; [name] then group = combat | body | runes | world | footsteps, and up to 4 voices:\n"
           ";   voice = sine|noise  left right  freq_start freq_end  delay attack hold decay\n"
+          "; strength = 0-200 scales one pattern (percent; the overlay's per-event sliders set it).\n"
           "; amplitudes 0-255 per hand (the right hand holds the weapon, the left one the shield and the bow), Hz, ms.\n"
           "; Loops (bow tension, surf, magnesis hum, stamina refill) hold while their state lasts; \"step <ground>\" are\n"
           "; the footstep taps. New sections become new patterns that sounds.ini can use.\n", f);
@@ -436,6 +440,8 @@ void HapticsLoadPatterns(const char *path) {
                     (u8)((strcmp(type, "noise") == 0 ? NOISE : 0) | (loop ? LOOP : 0)),
                     (u8)(l > 255 ? 255 : l), (u8)(r > 255 ? 255 : r), (u16)f0, (u16)f1, (u16)dl, (u16)at, (u16)ho, (u16)de };
             }
+        } else if (sscanf(line, "strength = %u", &l) == 1) {
+            cur->strength = l > 200 ? 200 : l;
         } else if (sscanf(line, "group = %15s", gname) == 1) {
             for (u32 g = 0; g < HapticGroup_Count; ++g) {
                 if (strcmp(gname, GroupNames[g]) == 0) {
@@ -504,10 +510,10 @@ void HapticsPlay(u32 pattern, float amount) {
         factor = amount > 1.0f ? 1.0f : amount;
     }
     u32 group = g_haptic_settings.group[p->group];
-    if (group == 0) {
+    if (group == 0 || p->strength == 0) {
         return;
     }
-    factor *= group / 100.0f;
+    factor *= group / 100.0f * p->strength / 100.0f;
 
     McHapticVoice voices[MC_HAPTIC_VOICES_MAX];
     for (u32 i = 0; i < p->count; ++i) {
@@ -524,6 +530,10 @@ void HapticsPlayStep(u32 material, bool left, float amount) {
         return;
     }
     const Pattern *s = material < STEP_MATERIALS && g_steps[material].count ? &g_steps[material] : &g_steps[1];
+    if (s->strength == 0) {
+        return;
+    }
+    amount *= s->strength / 100.0f;
     McHapticVoice voices[MC_HAPTIC_VOICES_MAX];
     for (u32 i = 0; i < s->count; ++i) {
         voices[i] = MakeVoice(&s->voices[i], g_next_slot, amount * group / 100.0f);
@@ -540,7 +550,7 @@ void HapticsSetLoop(HapticLoop loop, bool on) {
         return;
     }
     const Pattern *l = &g_loops[loop];
-    on = on && g_haptic_settings.enabled && g_haptic_settings.group[l->group] > 0;
+    on = on && g_haptic_settings.enabled && g_haptic_settings.group[l->group] > 0 && l->strength > 0;
     if (g_loop_on[loop] == on) {
         return;
     }
@@ -548,7 +558,8 @@ void HapticsSetLoop(HapticLoop loop, bool on) {
     McHapticVoice voices[MC_HAPTIC_VOICES_MAX];
     for (u32 i = 0; i < l->count; ++i) {
         // Off: amplitude 0 stops the slot
-        voices[i] = MakeVoice(&l->voices[i], DefaultLoops[loop].slots[i], on ? g_haptic_settings.group[l->group] / 100.0f : 0.0f);
+        voices[i] = MakeVoice(&l->voices[i], DefaultLoops[loop].slots[i],
+                              on ? g_haptic_settings.group[l->group] / 100.0f * l->strength / 100.0f : 0.0f);
         if (!on) {
             voices[i].amp_left = voices[i].amp_right = 0;
         }

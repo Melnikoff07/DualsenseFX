@@ -4,6 +4,7 @@
 #define TESLA_INIT_IMPL
 #include <tesla.hpp>
 
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -110,16 +111,171 @@ size_t StepIndex(int percent) {
     return best;
 }
 
-// A header with the setting's name and a slider with Off / 25% ... 200%
-void AddStrength(tsl::elm::List *list, const char *title, const char *key, int fallback) {
-    list->addItem(new tsl::elm::CategoryHeader(title));
+constexpr const char *PatternsPath = "sdmc:/config/adaptive_triggers/patterns.ini";
+constexpr const char *PatternsTmp  = "sdmc:/config/adaptive_triggers/patterns.ini.tmp";
+
+// patterns.ini sections and their per-pattern "strength =" lines (the module applies them within a second)
+class Patterns {
+public:
+    struct Section {
+        std::string name;
+        std::string group;
+        int strength = 100;
+        int header = -1;            // line index of [name]
+        int strength_line = -1;     // line index of "strength =", -1 if missing
+    };
+    std::vector<Section> sections;
+
+    void load() {
+        lines.clear();
+        sections.clear();
+        FILE *f = std::fopen(PatternsPath, "r");
+        if (f == nullptr) {
+            return;
+        }
+        char buf[512];
+        while (std::fgets(buf, sizeof(buf), f)) {
+            std::string line(buf);
+            while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
+                line.pop_back();
+            }
+            lines.push_back(line);
+        }
+        std::fclose(f);
+        for (size_t i = 0; i < lines.size(); ++i) {
+            const std::string &l = lines[i];
+            size_t b = l.find_first_not_of(" \t");
+            if (b == std::string::npos || l[b] == ';') {
+                continue;
+            }
+            if (l[b] == '[') {
+                size_t e = l.find(']', b);
+                Section s;
+                s.name = l.substr(b + 1, e == std::string::npos ? std::string::npos : e - b - 1);
+                s.header = i;
+                s.group = s.name.rfind("step ", 0) == 0 ? "footsteps" : "world";
+                sections.push_back(s);
+            } else if (!sections.empty()) {
+                int v;
+                char g[16];
+                if (std::sscanf(l.c_str() + b, "strength = %d", &v) == 1) {
+                    sections.back().strength = v;
+                    sections.back().strength_line = i;
+                } else if (std::sscanf(l.c_str() + b, "group = %15s", g) == 1) {
+                    sections.back().group = g;
+                }
+            }
+        }
+    }
+
+    void setStrength(const std::string &name, int value) {
+        for (auto &s : sections) {
+            if (s.name != name) {
+                continue;
+            }
+            std::string entry = "strength = " + std::to_string(value);
+            if (s.strength_line >= 0) {
+                lines[s.strength_line] = entry;
+            } else {
+                int at = s.header + 1;
+                lines.insert(lines.begin() + at, entry);
+                for (auto &o : sections) {
+                    if (o.header >= at) ++o.header;
+                    if (o.strength_line >= at) ++o.strength_line;
+                }
+                s.strength_line = at;
+            }
+            s.strength = value;
+            save();
+            return;
+        }
+    }
+
+private:
+    std::vector<std::string> lines;
+
+    void save() {
+        FILE *f = std::fopen(PatternsTmp, "w");
+        if (f == nullptr) {
+            return;
+        }
+        for (const auto &line : lines) {
+            std::fputs(line.c_str(), f);
+            std::fputc('\n', f);
+        }
+        std::fclose(f);
+        std::remove(PatternsPath);
+        std::rename(PatternsTmp, PatternsPath);
+    }
+};
+
+Patterns g_patterns;
+
+tsl::elm::NamedStepTrackBar *StrengthBar(int percent) {
     auto *bar = new tsl::elm::NamedStepTrackBar("↔", { "Off", "25%", "50%", "75%", "100%", "125%", "150%", "175%", "200%" });
-    bar->setProgress(StepIndex(g_config.get(key, fallback)));
+    bar->setProgress(StepIndex(percent));
+    return bar;
+}
+
+// "step grass" -> "Grass", "bomb explode" -> "Bomb explode"
+std::string DisplayName(const std::string &name) {
+    std::string n = name.rfind("step ", 0) == 0 ? name.substr(5) : name;
+    if (!n.empty()) {
+        n[0] = std::toupper(n[0]);
+    }
+    return n;
+}
+
+// Every event of one group with its own slider
+class GroupGui : public tsl::Gui {
+public:
+    GroupGui(std::string group, std::string title) : m_group(std::move(group)), m_title(std::move(title)) {}
+
+    tsl::elm::Element *createUI() override {
+        g_patterns.load();
+        auto *frame = new tsl::elm::OverlayFrame("DualsenseFX", m_title);
+        auto *list = new tsl::elm::List();
+        for (const auto &s : g_patterns.sections) {
+            if (s.group != m_group) {
+                continue;
+            }
+            list->addItem(new tsl::elm::CategoryHeader(DisplayName(s.name)));
+            auto *bar = StrengthBar(s.strength);
+            std::string name = s.name;
+            bar->setValueChangedListener([name](u8 index) {
+                g_patterns.setStrength(name, Steps[index < NumSteps ? index : NumSteps - 1]);
+            });
+            list->addItem(bar);
+        }
+        frame->setContent(list);
+        return frame;
+    }
+
+private:
+    std::string m_group, m_title;
+};
+
+// A header with the setting's name and a slider with Off / 25% ... 200%
+void AddStrength(tsl::elm::List *list, const char *title, const char *key, int fallback, const char *group = nullptr) {
+    list->addItem(new tsl::elm::CategoryHeader(title));
+    auto *bar = StrengthBar(g_config.get(key, fallback));
     std::string k = key;
     bar->setValueChangedListener([k](u8 index) {
         g_config.set(k, Steps[index < NumSteps ? index : NumSteps - 1]);
     });
     list->addItem(bar);
+    if (group != nullptr) {
+        auto *more = new tsl::elm::ListItem("Each event", "›");
+        std::string g = group, t = title;
+        more->setClickListener([g, t](u64 keys) {
+            if (keys & HidNpadButton_A) {
+                tsl::changeTo<GroupGui>(g, t);
+                return true;
+            }
+            return false;
+        });
+        list->addItem(more);
+    }
 }
 
 void AddToggle(tsl::elm::List *list, const char *title, const char *key, int fallback, int on_value = 1) {
@@ -139,7 +295,7 @@ public:
         auto *list = new tsl::elm::List();
 
         list->addItem(new tsl::elm::CategoryHeader("Output"));
-        auto *output = new tsl::elm::NamedStepTrackBar("\u2194", { "Off", "DualSense", "Joy-Con" });
+        auto *output = new tsl::elm::NamedStepTrackBar("↔", { "Off", "DualSense", "Joy-Con" });
         output->setProgress(std::min(g_config.get("output", 1), 2));
         output->setValueChangedListener([](u8 index) { g_config.set("output", index); });
         list->addItem(output);
@@ -150,11 +306,11 @@ public:
         AddToggle(list, "Low health heartbeat", "low_health_quarters", 4, 4);
 
         AddStrength(list, "Overall strength", "haptics_strength", 100);
-        AddStrength(list, "Footsteps", "footstep_strength", 50);
-        AddStrength(list, "Combat (hits, shield, bow)", "combat_strength", 100);
-        AddStrength(list, "Body (damage, heal, landing)", "body_strength", 100);
-        AddStrength(list, "Runes (bombs, Magnesis, Stasis, Cryonis)", "rune_strength", 100);
-        AddStrength(list, "World (water, chests, items, climbing)", "world_strength", 100);
+        AddStrength(list, "Footsteps", "footstep_strength", 50, "footsteps");
+        AddStrength(list, "Combat (hits, shield, bow)", "combat_strength", 100, "combat");
+        AddStrength(list, "Body (damage, heal, landing)", "body_strength", 100, "body");
+        AddStrength(list, "Runes (bombs, Magnesis, Stasis, Cryonis)", "rune_strength", 100, "runes");
+        AddStrength(list, "World (water, chests, items, climbing)", "world_strength", 100, "world");
 
         frame->setContent(list);
         return frame;

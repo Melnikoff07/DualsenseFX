@@ -12,7 +12,7 @@ void SoundsUpdate(const DmntCheatProcessMetadata *meta);
 void SoundsPoll(BotwState *state);
 
 // sounds.ini: which sounds play which pattern (writes the defaults when the file is missing). Load patterns first.
-void SoundsLoadRules(const char *path);
+void SoundsLoadRules(const char *path, bool forget_names);
 
 // Forget looked-up names (save reload, area change: sound packages get unloaded and their memory reused)
 void SoundsReset(void);

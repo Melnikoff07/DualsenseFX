@@ -416,9 +416,11 @@ static bool FileChanged(WatchedFile *w) {
     return changed;
 }
 
-static void LoadPatternsAndRules(void) {
+// Rules refer to patterns by name, so they are read after them. A strength change in patterns.ini keeps the looked-up
+// sound names (pattern ids stay the same); a change in sounds.ini looks them up again.
+static void LoadPatternsAndRules(bool forget_names) {
     HapticsLoadPatterns(PATTERNS_PATH);
-    SoundsLoadRules(SOUNDS_PATH);    // after the patterns: rules refer to them by name
+    SoundsLoadRules(SOUNDS_PATH, forget_names);
 }
 
 static void CheckConfigChanged(void) {
@@ -436,7 +438,7 @@ static void CheckConfigChanged(void) {
     bool p = FileChanged(&patterns), r = FileChanged(&sounds);
     if (p || r) {
         LogLine("%s changed, reloading", p ? "patterns.ini" : "sounds.ini");
-        LoadPatternsAndRules();
+        LoadPatternsAndRules(r);
     }
 }
 
@@ -713,7 +715,7 @@ int main(int argc, char **argv) {
     StartLog();
     LoadConfig();
     HapticsApplyOutput();
-    LoadPatternsAndRules();
+    LoadPatternsAndRules(true);
 
     GameSession session = {0};
     u64 next_haptics_log = armGetSystemTick() + armNsToTicks(20000000000ULL);

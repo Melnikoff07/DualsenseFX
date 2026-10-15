@@ -251,7 +251,7 @@ static void ParseRuleLine(char *line, u32 *bad) {
     g_rules[g_num_rules++] = r;
 }
 
-void SoundsLoadRules(const char *path) {
+void SoundsLoadRules(const char *path, bool forget_names) {
     g_num_rules = 0;
     u32 bad = 0;
     FILE *f = fopen(path, "r");
@@ -278,7 +278,9 @@ void SoundsLoadRules(const char *path) {
         fclose(f);
     }
     LogLine("sounds: %u rules, %u lines not understood", g_num_rules, bad);
-    SoundsReset();
+    if (forget_names) {
+        SoundsReset();      // the rules changed: look the sounds up again
+    }
 }
 
 static void Classify(const char *name, CacheEntry *e) {
