@@ -35,6 +35,10 @@ bool ProfileBuildMatches(const GameProfile *p, const u8 *build_id);
 void ProfileSetCurrent(const GameProfile *p);
 void ProfileSetCurrentWithout(u64 program_id);
 
+// A profile made from the overlay may only have the program id as its name: take the title from the system
+// (the first filled-in language of the game's control data) and write it into game.ini
+void ProfileFillName(GameProfile *p);
+
 // Appends the found sound pool to game.ini, so the next start doesn't need to look for it
 void ProfileSaveSoundPool(GameProfile *p, u64 sap, u64 pool, u64 vtable, u32 slot_size, u32 slots);
 

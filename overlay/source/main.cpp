@@ -662,7 +662,20 @@ public:
             list->addItem(create);
         }
         if (game.has_profile) {
-            list->addItem(new tsl::elm::CategoryHeader("Sounds of this game"));
+            std::string status = "unknown";
+            if (FILE *sf = std::fopen("sdmc:/config/dualsensefx/sound_status.txt", "r")) {
+                char sb[64] = {0};
+                if (std::fgets(sb, sizeof(sb), sf)) {
+                    status = sb;
+                    status.erase(status.find_last_not_of("\r\n ") + 1);
+                }
+                std::fclose(sf);
+            }
+            std::string header = status == "active" ? "Sounds of this game (found)" :
+                                 status == "searching" ? "Sounds of this game (looking...)" :
+                                 status == "not supported" ? "Sounds: this game has its own audio engine, not supported yet" :
+                                 "Sounds of this game";
+            list->addItem(new tsl::elm::CategoryHeader(header));
             auto *record = new tsl::elm::ToggleListItem("Record sounds", Recording());
             record->setStateChangedListener([](bool state) { SetRecording(state); });
             list->addItem(record);

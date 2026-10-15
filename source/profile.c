@@ -163,6 +163,60 @@ bool ProfileBuildMatches(const GameProfile *p, const u8 *build_id) {
     return false;
 }
 
+void ProfileFillName(GameProfile *p) {
+    char id[17];
+    snprintf(id, sizeof(id), "%016lX", p->program_id);
+    if (strcmp(p->name, id) != 0 || R_FAILED(nsInitialize())) {
+        return;
+    }
+    NsApplicationControlData *data = malloc(sizeof(*data));
+    u64 size = 0;
+    if (data && R_SUCCEEDED(nsGetApplicationControlData(NsApplicationControlSource_Storage, p->program_id, data, sizeof(*data), &size))) {
+        // Plain language entries (a newer control data format compresses them: then the name stays the id)
+        for (int i = 0; i < 16; ++i) {
+            const char *n = data->nacp.lang_data.lang[i].name;
+            bool printable = n[0] != 0;
+            for (const char *c = n; *c && printable; ++c) {
+                printable = (unsigned char)*c >= 0x20;
+            }
+            if (printable) {
+                snprintf(p->name, sizeof(p->name), "%s", n);
+                break;
+            }
+        }
+    }
+    free(data);
+    nsExit();
+    if (strcmp(p->name, id) == 0) {
+        return;
+    }
+    // Rewrite the name line
+    char path[128];
+    static char buf[8192];
+    ProfilePath(p, "game.ini", path, sizeof(path));
+    FILE *f = fopen(path, "r");
+    if (f == NULL) {
+        return;
+    }
+    size_t n = 0;
+    char line[256];
+    while (fgets(line, sizeof(line), f) && n < sizeof(buf) - 300) {
+        const char *k = line;
+        while (*k == ' ' || *k == '\t') ++k;
+        if (strncmp(k, "name", 4) == 0 && strchr(k, '=')) {
+            n += snprintf(buf + n, sizeof(buf) - n, "name = %s\n", p->name);
+        } else {
+            n += snprintf(buf + n, sizeof(buf) - n, "%s", line);
+        }
+    }
+    fclose(f);
+    if ((f = fopen(path, "w"))) {
+        fwrite(buf, 1, n, f);
+        fclose(f);
+        LogLine("profile: named %s \"%s\"", id, p->name);
+    }
+}
+
 void ProfileSaveSoundPool(GameProfile *p, u64 sap, u64 pool, u64 vtable, u32 slot_size, u32 slots) {
     char path[128];
     ProfilePath(p, "game.ini", path, sizeof(path));

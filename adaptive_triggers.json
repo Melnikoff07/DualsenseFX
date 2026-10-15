@@ -32,7 +32,8 @@
         "nifm:u",
         "bpc",
         "bpc:c",
-        "hid"
+        "hid",
+        "ns:am2"
     ],
     "service_host": [],
     "kernel_capabilities": [

@@ -9,6 +9,15 @@
 // find set, the pool is looked for in the game (atkfind.c); sound_archive_player 0 without find: no sound haptics.
 void SoundsConfigure(u64 sound_archive_player, u64 sound_pool, u64 wave_sound_vtable, u32 slot_size, u32 count, bool find);
 
+typedef enum {
+    SoundsStatus_Off,           // no game, or the profile has sound = off
+    SoundsStatus_Searching,     // looking for the pool / waiting for it to be valid
+    SoundsStatus_Active,
+    SoundsStatus_NotSupported,  // the game doesn't use nn::atk (or its type names were stripped)
+} SoundsStatus;
+
+SoundsStatus SoundsGetStatus(void);
+
 // A pool found by the search, once, so main can write it into the game's profile
 bool SoundsTakeFound(AtkLocation *out);
 

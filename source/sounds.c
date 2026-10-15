@@ -163,7 +163,7 @@ void SoundsMonitorWrite(const char *path) {
 
 static u64 g_sap_offset, g_pool_field, g_vtable_offset;  // from the game profile or found (atkfind.c)
 static u32 g_slot_size = 0x3A0, g_count = 64;
-static bool g_auto, g_auto_tried, g_found_new;
+static bool g_auto, g_auto_tried, g_auto_failed, g_found_new;
 static AtkLocation g_found;
 static u64 g_main_base;
 static u64 g_pool;
@@ -175,6 +175,16 @@ static u64 g_last_play_tick[HAPTIC_PATTERN_IDS];
 static u8 g_pool_buf[POOL_BUF_SIZE];
 static u8 g_chunk[BARS_CHUNK + 4];
 static u32 g_resolved, g_unnamed;
+
+SoundsStatus SoundsGetStatus(void) {
+    if (g_auto_failed) {
+        return SoundsStatus_NotSupported;
+    }
+    if (g_sap_offset == 0 && !g_auto) {
+        return SoundsStatus_Off;
+    }
+    return g_pool ? SoundsStatus_Active : SoundsStatus_Searching;
+}
 
 bool SoundsTakeFound(AtkLocation *out) {
     if (!g_found_new) {
@@ -201,6 +211,7 @@ void SoundsConfigure(u64 sound_archive_player, u64 sound_pool, u64 wave_sound_vt
     }
     g_auto = find && sound_archive_player == 0;
     g_auto_tried = false;
+    g_auto_failed = false;
     g_pool = 0;
     g_check_tick = 0;
     SoundsReset();
@@ -218,6 +229,8 @@ void SoundsUpdate(const DmntCheatProcessMetadata *meta) {
             g_count = loc.count;
             g_found = loc;
             g_found_new = true;
+        } else {
+            g_auto_failed = true;
         }
     }
     if (g_sap_offset == 0 || g_count == 0) {

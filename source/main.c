@@ -596,6 +596,7 @@ static void TryAttach(GameSession *s) {
     if (s->profile.program_id == BOTW_PROGRAM_ID) {
         BotwInit(&s->botw, &s->meta);
     }
+    ProfileFillName(&s->profile);
     SoundsConfigure(s->profile.sound_archive_player, s->profile.sound_pool, s->profile.wave_sound_vtable,
                     s->profile.sound_slot_size, s->profile.sound_slots, s->profile.sound_find);
     ProfileSetCurrent(&s->profile);
@@ -644,6 +645,7 @@ static void Update(GameSession *s) {
         CloseSession(s);
         memset(s, 0, sizeof(*s));
         ProfileSetCurrent(NULL);
+        remove(DFX_DIR "/sound_status.txt");
         SoundsConfigure(0, 0, 0, 0, 0, false);
         g_patterns_path[0] = g_sounds_path[0] = 0;
         LoadPatternsAndRules(true);
@@ -678,6 +680,17 @@ static void Update(GameSession *s) {
         DumpUpdate();
         BotwUpdate(&s->botw, &s->meta);
         SoundsUpdate(&s->meta);
+        static SoundsStatus last_status = SoundsStatus_Off;
+        SoundsStatus status = SoundsGetStatus();
+        if (status != last_status) {
+            static const char *Text[] = { "off", "searching", "active", "not supported" };
+            FILE *f = fopen(DFX_DIR "/sound_status.txt", "w");
+            if (f) {
+                fprintf(f, "%s\n", Text[status]);
+                fclose(f);
+            }
+            last_status = status;
+        }
         AtkLocation found;
         if (SoundsTakeFound(&found)) {
             ProfileSaveSoundPool(&s->profile, found.sound_archive_player, found.sound_pool, found.wave_sound_vtable,
