@@ -1,7 +1,8 @@
-# DualsenseFX for Zelda: Breath of the Wild
+# DualsenseFX
 
-DualSense adaptive triggers, lightbar effects and HD haptics that react to what happens in
-The Legend of Zelda: Breath of the Wild **1.6.0** (build ID `8E9978D50BDD20B4`) on a Switch running Atmosphère.
+Haptics that react to what happens in Switch games, on a **DualSense** (adaptive triggers, lightbar and HD haptics)
+or on **Joy-Con / Pro Controller** HD rumble, on a Switch running Atmosphère. The first supported game is
+The Legend of Zelda: Breath of the Wild **1.6.0** (build ID `8E9978D50BDD20B4`); more games come as game profiles.
 
 The haptics come from two sources: the game's state (hearts, stamina, the bow, the runes) and the game's own sounds.
 Every short sound the game plays is looked up by name, so a footstep tap lands exactly when the game plays the
@@ -11,14 +12,15 @@ overlay, without a reboot.
 | Part | Location on the SD card | What it does |
 |---|---|---|
 | [MissionControl fork](MissionControl) (submodule, branch `dualsense-triggers`) | `atmosphere/contents/010000000000bd00` | DualSense driver with HD haptics over Bluetooth; extra `mc` service commands: 6/7 trigger effects, 8 analog trigger state, 9/10 lightbar colour, 11 haptics status, 12/13 haptic pattern voices, 14 controller input. Overrides are cleared automatically when the client session closes |
-| `adaptive_triggers` sysmodule | `atmosphere/contents/42000000000d5e00` | detects BotW, reads game state through `dmnt:cht` (read only) and sends effects to MissionControl |
-| DualsenseFX overlay | `switch/.overlays/dualsense_fx.ovl` | Tesla / Ultrahand menu: effects on / off and strength per group |
+| `adaptive_triggers` sysmodule | `atmosphere/contents/42000000000d5e00` | attaches to games that have a profile, reads their state through `dmnt:cht` (read only) and their sounds, plays the effects on the DualSense (through MissionControl) or on the Joy-Cons (through `hid`) |
+| DualsenseFX overlay | `switch/.overlays/dualsense_fx.ovl` | Tesla / Ultrahand menu: output (DualSense / Joy-Con / off), effects on / off, strength per group and per event, game picker |
 
 ## Requirements
 
 - A Switch running Atmosphère (tested: firmware 22.5.0, Atmosphère 1.12.0, emuMMC).
-- A Sony DualSense paired through MissionControl. The fork replaces the stock MissionControl 0.16.0.
-- Breath of the Wild **1.6.0** (other versions are ignored by the module).
+- A Sony DualSense paired through MissionControl (the fork replaces the stock MissionControl 0.16.0), or plain
+  Joy-Cons / a Pro Controller (no MissionControl needed for those).
+- Breath of the Wild **1.6.0** (other builds only get the sound driven effects).
 - For the overlay: Ultrahand Overlay or Tesla (nx-ovlloader).
 
 Use it offline on emuMMC. It reads game memory through Atmosphère's cheat service the same way Breeze/EdiZon do and
@@ -41,16 +43,21 @@ To go back to the normal rumble, delete `missioncontrol.ini` and reboot.
 
 ## Settings
 
-All files are in `config/adaptive_triggers/` and are applied within a second after they change, no reboot needed:
+All files are in `config/dualsensefx/` (settings from the old `config/adaptive_triggers/` are moved there
+automatically) and are applied within a second after they change, no reboot needed:
 
 | File | What |
 |---|---|
-| `config.ini` | effects on / off, strength per group (combat, body, runes, world, footsteps), trigger tuning. The overlay edits this file |
-| `patterns.ini` | the shape of every haptic pattern: up to 4 voices (sine or noise, amplitude per hand, frequency sweep, delay / attack / hold / decay). Written with the defaults on first start |
-| `sounds.ini` | which game sounds play which pattern: `mask = pattern [strength %]`, `*` matches anything, first match wins. Written with the defaults on first start |
+| `config.ini` | `output=` 1 DualSense / 2 Joy-Con / 0 off, effects on / off, strength per group (combat, body, runes, world, footsteps), trigger tuning. The overlay edits this file |
+| `patterns.ini` | pattern library every game can use (tap, click, thud, explosion, splash, ...) |
+| `games/<program id>/game.ini` | a game profile: name, `enabled`, builds, the game's sound pool (found automatically) |
+| `games/<program id>/patterns.ini` | the shape of every haptic pattern of the game: up to 4 voices (sine or noise, amplitude per hand, frequency sweep, delay / attack / hold / decay), `group`, `strength` (the per-event slider) |
+| `games/<program id>/patterns-joycon.ini` | the Joy-Con versions of those patterns (same format); a pattern missing here is converted from the DualSense one |
+| `games/<program id>/sounds.ini` | which game sounds play which pattern: `mask = pattern [strength %]`, `*` matches anything, first match wins |
 
-The overlay (**DualsenseFX** in the Ultrahand list) has switches for the adaptive triggers, the haptics and the
-low-health heartbeat, and strength sliders (off, 25 % … 200 %) for every group. Log: `config/adaptive_triggers/log.txt`
+A game without a folder in `games/` is left alone. The overlay (**DualsenseFX** in the Ultrahand list) has the output
+switch, switches for the adaptive triggers, the haptics and the low-health heartbeat, strength sliders (off, 25 % …
+200 %) for every group and, inside each group, for every event of the picked game. Log: `config/dualsensefx/log.txt`
 (previous boot: `log.old.txt`).
 
 ## Effects
@@ -92,6 +99,19 @@ the module adds its own patterns, mixed with it. Left / right put an effect in t
 | world | chests, items, rolls, jumps, climbing, crates | lid, small sparkle, roll, push off, grip, crack |
 | footsteps | every step (heel and lighter toe) | texture for the ground: grass, sand, soil, stone, wood, metal, ice, snow, cloth, water; stronger when running |
 
+### Joy-Con and Pro Controller
+
+With `output=2` the same events play as HD rumble on the Joy-Cons (attached or detached) or a Pro Controller, sent
+200 times a second through the `hid` service while our effects play; the game's own rumble takes over again when
+they end. Adaptive triggers and the lightbar are DualSense only.
+
+A Joy-Con is not a small DualSense: it has one small linear resonant actuator per hand, driven with a low and a high
+band, that shakes hard only near about 160 Hz and 320 Hz and hardly at the 30-60 Hz the DualSense patterns use for
+weight; it can't play real noise either. So every event has its own Joy-Con version (`patterns-joycon.ini`): weight
+is a knock near 150-180 Hz falling towards 100 Hz, edges and clicks are short 320 Hz pulses, textures are jittered
+high band noise, and the two bands together stay within the amplitude the actuator is safe at. Deep blasts and
+rumbles stay weaker than on the DualSense; that is the hardware.
+
 ## How the sound driven haptics work
 
 BotW uses NintendoWare audio (`nn::atk`, its RTTI type names are kept in the binary). `[main+2CC1670]` is the
@@ -127,6 +147,17 @@ Sources: the [zeldaret/botw](https://github.com/zeldaret/botw) decompilation (v1
 build ID, the module's correlation searches, recordings over the network control and the game's own RTTI and
 strings.
 
+## Other games
+
+DualsenseFX finds the sound pool of games built on NintendoWare audio (`nn::atk`) by itself, so a new game mostly
+needs a profile: which sounds play which pattern, and maybe game specific patterns. Profiles are made by playing the
+game with the network control below and looking at the sound names it plays. Games with their own audio engine
+(Super Smash Bros. Ultimate uses Bandai Namco's NUS3) need more research. Tried so far: Mario Odyssey (`nn::atk`,
+the sound pool is not found yet), Smash (not supported).
+
+Made a profile for a game? Open a pull request with its `sd/games/<program id>/` folder, or an issue with the game,
+its build ID and what you found.
+
 ## Development: network control
 
 `net=1` and a `net_token` (any long random string) in `config.ini` start a small TCP server (port 7330) for
@@ -135,6 +166,7 @@ move the project's files and reboot. It never writes game memory and only touche
 
 ```
 export SWNET_HOST=<console ip> SWNET_TOKEN=<net_token>
+tools/swnet.py doctor              # where the connection stops, if it does
 tools/swnet.py cmd help
 tools/swnet.py cmd "pattern bomb explode"
 tools/swnet.py read rune+0 1000 rune.bin
@@ -148,8 +180,8 @@ tools/sndlog.py sounds.txt 120
 Clone with submodules (the MissionControl fork with its own `libnx` / `Atmosphere-libs` submodules, and libtesla):
 
 ```
-git clone --recurse-submodules https://github.com/Melnikoff07/DualsenseFX-for-Zelda-Breath-of-the-Wild.git
-cd DualsenseFX-for-Zelda-Breath-of-the-Wild
+git clone --recurse-submodules https://github.com/Melnikoff07/DualsenseFX.git
+cd DualsenseFX
 ```
 
 Build the toolchain image once (devkitPro devkitA64 + the libnx revision MissionControl expects), then the parts:
@@ -159,7 +191,7 @@ docker build -t mc-devkit -f tools/Dockerfile MissionControl/lib/libnx
 tools/dk 'cd MissionControl && make dist -j8'
 tools/dk 'make -j8 dist'
 tools/dk 'cd overlay && make -j8'
-tools/package.sh 0.3.0          # release zip
+tools/package.sh 0.4.0          # release zip
 ```
 
 `tools/dk` runs the command in that image with the repository mounted at `/work`. Without a local Docker it uses
@@ -173,7 +205,7 @@ the repository at `/work` — mount it at a path without spaces, the devkitPro m
 With the SD card mounted (`SD=/Volumes/NS_SAMSUNG` by default):
 
 ```
-tools/deploy.sh             # MissionControl fork + adaptive_triggers + config.ini
+tools/deploy.sh             # MissionControl fork + adaptive_triggers + overlay + game profiles (config.ini only if missing)
 tools/deploy.sh --rollback  # restore the backed up MissionControl, remove adaptive_triggers
 ```
 
@@ -182,7 +214,7 @@ overlay sysmodule manager (the module ships a `toolbox.json`).
 
 ## Limitations
 
-- BotW 1.6.0 only. Other builds are detected and left alone ("unknown build" in the log).
+- BotW's state based effects (inventory, bow, runes, surfing) need 1.6.0; other builds only get the sound driven ones.
 - While BotW runs the module holds one of the two `dmnt:cht` sessions: Breeze or EdiZon work, but not both at once.
 - Attaches 30 s after launch: attaching earlier conflicts with SaltyNX injection.
 
