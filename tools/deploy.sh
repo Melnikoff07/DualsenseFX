@@ -1,6 +1,6 @@
 #!/bin/bash
 # Copy the builds onto a Switch SD card mounted on this computer.
-#   tools/deploy.sh             -> MissionControl fork + adaptive_triggers + config.ini
+#   tools/deploy.sh             -> MissionControl fork + DualsenseFX module, overlay and game profiles
 #   tools/deploy.sh --rollback  -> restore your original MissionControl and remove adaptive_triggers
 #
 # SD     mount point of the SD card (default /Volumes/NS_SAMSUNG on macOS)
@@ -8,7 +8,8 @@
 #            default: the newest backups/MissionControl-* folder in this repository (git-ignored)
 #
 # Only touches atmosphere/contents/010000000000bd00, atmosphere/contents/42000000000d5e00
-# and config/adaptive_triggers/config.ini. Back up your current MissionControl before the first deploy.
+# switch/.overlays/dualsense_fx.ovl and config/dualsensefx (config.ini only when missing: it holds your settings).
+# Back up your current MissionControl before the first deploy.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -43,13 +44,18 @@ else
     AT_SRC="$ROOT/dist/atmosphere/contents/$AT_TID"
     [ -f "$AT_SRC/exefs.nsp" ] || { echo "No adaptive_triggers build at $AT_SRC (run: tools/dk 'make -j8 dist')"; exit 1; }
     echo "adaptive_triggers: $(sum "$AT_DST/exefs.nsp") -> $(sum "$AT_SRC/exefs.nsp")"
-    mkdir -p "$AT_DST/flags" "$SD/config/adaptive_triggers"
+    mkdir -p "$AT_DST/flags" "$SD/config/dualsensefx"
     cp -X "$AT_SRC/exefs.nsp" "$AT_SRC/toolbox.json" "$AT_DST/"
     touch "$AT_DST/flags/boot2.flag"
-    cp -X "$ROOT/sd/config.ini" "$SD/config/adaptive_triggers/config.ini"
+    [ -f "$SD/config/dualsensefx/config.ini" ] || cp -X "$ROOT/sd/config.ini" "$SD/config/dualsensefx/config.ini"
+    cp -RX "$ROOT/sd/games" "$SD/config/dualsensefx/"
+    if [ -f "$ROOT/overlay/dualsense_fx.ovl" ]; then
+        mkdir -p "$SD/switch/.overlays"
+        cp -X "$ROOT/overlay/dualsense_fx.ovl" "$SD/switch/.overlays/"
+    fi
 fi
 
-find "$MC_DST" "$SD/config/adaptive_triggers" -name '._*' -delete 2>/dev/null || true
+find "$MC_DST" "$SD/config/dualsensefx" -name '._*' -delete 2>/dev/null || true
 [ -d "$AT_DST" ] && find "$AT_DST" -name '._*' -delete
 sync
 echo "on SD: MissionControl $(sum "$MC_DST/exefs.nsp"), adaptive_triggers $(sum "$AT_DST/exefs.nsp")"

@@ -8,7 +8,7 @@
 
 void LogLine(const char *fmt, ...);
 
-#define DUMP_PATH  "sdmc:/config/adaptive_triggers/main.bin"
+#define DUMP_PATH  "sdmc:/config/dualsensefx/main.bin"
 #define DUMP_CHUNK 0x20000  // per poll, ~2.5 MB/s at 20 Hz
 #define PAGE       0x1000
 

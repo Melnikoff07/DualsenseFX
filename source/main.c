@@ -1,9 +1,6 @@
-// adaptive_triggers: watches the running application and, while BotW is running,
-// attaches to it through dmnt:cht and drives the DualSense triggers through MissionControl.
-//
-// Skeleton stage: no game state is read yet. While BotW runs we log its module layout
-// (to find the build id) and apply a light constant resistance so the lifecycle can be
-// felt on the controller: on when the game starts, off when it exits.
+// DualsenseFX sysmodule: watches the running application and, when the game has a profile
+// (config/dualsensefx/games/<program id>/game.ini), attaches to it through dmnt:cht (read only) and drives the
+// DualSense (MissionControl) or the Joy-Con / Pro Controller rumble from the game's state and sounds.
 #include <switch.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -18,15 +15,16 @@
 #include "net.h"
 #include "search.h"
 #include "sounds.h"
+#include "profile.h"
 
-#define BOTW_PROGRAM_ID 0x01007EF00011E000ULL
-
-#define LOG_DIR      "sdmc:/config/adaptive_triggers"
+#define LOG_DIR      DFX_DIR
 #define LOG_PATH     LOG_DIR "/log.txt"
 #define LOG_OLD_PATH LOG_DIR "/log.old.txt"
 #define CONFIG_PATH  LOG_DIR "/config.ini"
-#define PATTERNS_PATH LOG_DIR "/patterns.ini"
-#define SOUNDS_PATH  LOG_DIR "/sounds.ini"
+
+// The current game's profile files (none while no game with a profile runs)
+static char g_patterns_path[128];
+static char g_sounds_path[128];
 
 #define POLL_INTERVAL_NS        (250 * 1000000ULL)
 #define ACTIVE_POLL_INTERVAL_NS (50 * 1000000ULL)  // 20 Hz while attached to the game
@@ -128,7 +126,7 @@ static void StartLog(void) {
     mkdir(LOG_DIR, 0777);
     remove(LOG_OLD_PATH);
     rename(LOG_PATH, LOG_OLD_PATH);
-    LogLine("adaptive_triggers started");
+    LogLine("DualsenseFX started");
 }
 
 // ---- watches: pointer chains from config.ini whose values are logged when they change ----
@@ -419,13 +417,13 @@ static bool FileChanged(WatchedFile *w) {
 // Rules refer to patterns by name, so they are read after them. A strength change in patterns.ini keeps the looked-up
 // sound names (pattern ids stay the same); a change in sounds.ini looks them up again.
 static void LoadPatternsAndRules(bool forget_names) {
-    HapticsLoadPatterns(PATTERNS_PATH);
-    SoundsLoadRules(SOUNDS_PATH, forget_names);
+    HapticsLoadPatterns(g_patterns_path[0] ? g_patterns_path : NULL);
+    SoundsLoadRules(g_sounds_path[0] ? g_sounds_path : NULL, forget_names);
 }
 
 static void CheckConfigChanged(void) {
     static u64 next_tick;
-    static WatchedFile config = { CONFIG_PATH, 0, false }, patterns = { PATTERNS_PATH, 0, false }, sounds = { SOUNDS_PATH, 0, false };
+    static WatchedFile config = { CONFIG_PATH, 0, false }, patterns = { g_patterns_path, 0, false }, sounds = { g_sounds_path, 0, false };
     u64 now = armGetSystemTick();
     if (now < next_tick) {
         return;
@@ -434,6 +432,10 @@ static void CheckConfigChanged(void) {
     if (FileChanged(&config)) {
         LogLine("config.ini changed, reloading");
         ReloadConfig();
+    }
+    if (g_patterns_path[0] == 0) {
+        patterns.have = sounds.have = false;    // no game: start fresh with the next one
+        return;
     }
     bool p = FileChanged(&patterns), r = FileChanged(&sounds);
     if (p || r) {
@@ -466,7 +468,11 @@ typedef struct {
     bool lightbar_set;
     u8 lightbar[3];
     bool search_started;
+    GameProfile profile;
 } GameSession;
+
+static u64 g_no_profile_pid;   // the running application has no (enabled) profile: look again every few seconds
+static u64 g_no_profile_recheck;
 
 static bool GetCurrentApplication(u64 *out_pid, u64 *out_program_id) {
     if (R_FAILED(pmdmntGetApplicationProcessId(out_pid))) {
@@ -541,17 +547,28 @@ static void TryAttach(GameSession *s) {
     if (R_FAILED(rc = dmntchtGetCheatProcessMetadata(&s->meta))) {
         goto fail;
     }
-    if (s->meta.process_id != s->pid || s->meta.program_id != BOTW_PROGRAM_ID) {
+    if (s->meta.process_id != s->pid || s->meta.program_id != s->profile.program_id) {
         LogLine("dmnt attached to another process (pid %lu, program %016lX), giving up", s->meta.process_id, s->meta.program_id);
         s->state = SessionState_Failed;
         CloseSession(s);
         return;
     }
 
-    LogLine("attached to BotW after %u tries", s->attach_tries + 1);
+    LogLine("attached to %s after %u tries", s->profile.name, s->attach_tries + 1);
     LogMetadata(&s->meta);
+    if (!ProfileBuildMatches(&s->profile, s->meta.main_nso_build_id)) {
+        LogLine("this build is not in the profile's builds, leaving the game alone");
+        s->state = SessionState_Failed;
+        CloseSession(s);
+        return;
+    }
     CheckMemoryRead(&s->meta);
-    BotwInit(&s->botw, &s->meta);
+    // The built-in BotW logic (inventory, bow, runes, surfing) checks the build itself
+    if (s->profile.program_id == BOTW_PROGRAM_ID) {
+        BotwInit(&s->botw, &s->meta);
+    }
+    SoundsConfigure(s->profile.sound_archive_player, s->profile.sound_pool, s->profile.wave_sound_vtable);
+    ProfileSetCurrent(&s->profile);
     DumpStart(&s->meta);
 
     HapticsSetAvailable(true);       // Joy-Con output works without MissionControl
@@ -577,7 +594,7 @@ fail:
         s->last_attach_rc = rc;
     }
     if (++s->attach_tries >= ATTACH_TIMEOUT_TICKS) {
-        LogLine("could not attach to BotW, giving up until it restarts");
+        LogLine("could not attach to %s, giving up until it restarts", s->profile.name);
         s->state = SessionState_Failed;
         CloseSession(s);
     }
@@ -585,17 +602,32 @@ fail:
 
 static void Update(GameSession *s) {
     u64 pid = 0, program_id = 0;
-    bool botw_running = GetCurrentApplication(&pid, &program_id) && program_id == BOTW_PROGRAM_ID;
+    bool running = GetCurrentApplication(&pid, &program_id);
 
     // Game exited or was restarted
-    if (s->state != SessionState_Idle && (!botw_running || pid != s->pid)) {
-        LogLine("BotW (pid %lu) is gone, releasing", s->pid);
+    if (s->state != SessionState_Idle && (!running || pid != s->pid)) {
+        LogLine("%s (pid %lu) is gone, releasing", s->profile.name, s->pid);
         CloseSession(s);
         memset(s, 0, sizeof(*s));
+        ProfileSetCurrent(NULL);
+        SoundsConfigure(0, 0, 0);
+        g_patterns_path[0] = g_sounds_path[0] = 0;
+        LoadPatternsAndRules(true);
     }
 
-    if (s->state == SessionState_Idle && botw_running) {
-        LogLine("BotW started, pid %lu", pid);
+    if (s->state == SessionState_Idle && running && (pid != g_no_profile_pid || armGetSystemTick() >= g_no_profile_recheck)) {
+        if (!ProfileLoad(program_id, &s->profile) || !s->profile.enabled) {
+            if (pid != g_no_profile_pid) {
+                LogLine("application %016lX has %s, not attaching", program_id, s->profile.name[0] ? "its profile turned off" : "no profile");
+            }
+            g_no_profile_pid = pid;
+            g_no_profile_recheck = armGetSystemTick() + armNsToTicks(5000000000ULL);
+            return;
+        }
+        LogLine("%s started, pid %lu", s->profile.name, pid);
+        ProfilePath(&s->profile, "patterns.ini", g_patterns_path, sizeof(g_patterns_path));
+        ProfilePath(&s->profile, "sounds.ini", g_sounds_path, sizeof(g_sounds_path));
+        LoadPatternsAndRules(true);
         s->state = SessionState_Attaching;
         s->pid = pid;
         s->start_tick = armGetSystemTick();
@@ -609,6 +641,7 @@ static void Update(GameSession *s) {
         UpdateWatches(&s->meta);
         DumpUpdate();
         BotwUpdate(&s->botw, &s->meta);
+        SoundsUpdate(&s->meta);
 
         // Send effects only when they change, the controller keeps the last ones
         TriggerEffects effects;
@@ -713,6 +746,7 @@ int main(int argc, char **argv) {
     }
 
     StartLog();
+    ProfileInstallDefaults();
     LoadConfig();
     HapticsApplyOutput();
     LoadPatternsAndRules(true);
@@ -745,6 +779,8 @@ int main(int argc, char **argv) {
         CheckConfigChanged();
         if (session.state == SessionState_Active) {
             BotwPollFast(&session.botw);
+            BotwState *b = &session.botw;
+            SoundsPoll(b->supported ? BotwInGame(b) && !b->menu_open : true);
         }
 
         now = armGetSystemTick();

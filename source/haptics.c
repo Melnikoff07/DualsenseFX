@@ -394,6 +394,9 @@ static void WriteDefaults(const char *path) {
 
 void HapticsLoadPatterns(const char *path) {
     ResetPatterns();
+    if (path == NULL) {
+        return;     // no game: the built-in defaults
+    }
     FILE *f = fopen(path, "r");
     if (f == NULL) {
         WriteDefaults(path);

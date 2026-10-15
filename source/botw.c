@@ -44,7 +44,6 @@
 #include "botw.h"
 #include "haptics.h"
 #include "search.h"
-#include "sounds.h"
 
 void LogLine(const char *fmt, ...);
 void LogVerbose(const char *fmt, ...);
@@ -576,9 +575,6 @@ static void UpdateRunes(BotwState *state, const DmntCheatProcessMetadata *meta) 
 }
 
 void BotwPollFast(BotwState *state) {
-    if (state->supported) {
-        SoundsPoll(state);
-    }
     if (!state->supported || !state->runes_read || state->rune_selected != RUNE_CRYONIS) {
         state->cryonis_event = false;
         return;
@@ -754,7 +750,6 @@ void BotwUpdate(BotwState *state, const DmntCheatProcessMetadata *meta) {
     UpdateBow(state);
     UpdateActionFlags(state);
     UpdateRunes(state, meta);
-    SoundsUpdate(meta);
 
     TrackValues(state);
 }

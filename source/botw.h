@@ -82,6 +82,7 @@ typedef struct {
 extern BotwSettings g_botw_settings;
 
 void BotwInit(BotwState *state, const DmntCheatProcessMetadata *meta);
+bool BotwInGame(const BotwState *state);
 void BotwUpdate(BotwState *state, const DmntCheatProcessMetadata *meta);
 
 // Called as often as possible (~100 Hz): one-frame rune events that the 20 Hz update would miss (Cryonis)

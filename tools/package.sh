@@ -15,13 +15,14 @@ done
 
 cp -R "$ROOT/MissionControl/dist/atmosphere" "$STAGE/"
 cp -R "$ROOT/dist/atmosphere/contents/42000000000d5e00" "$STAGE/atmosphere/contents/"
-mkdir -p "$STAGE/switch/.overlays" "$STAGE/config/adaptive_triggers"
+mkdir -p "$STAGE/switch/.overlays" "$STAGE/config/dualsensefx"
 cp "$ROOT/overlay/dualsense_fx.ovl" "$STAGE/switch/.overlays/"
-cp "$ROOT/sd/config.ini" "$ROOT/sd/patterns.ini" "$ROOT/sd/sounds.ini" "$STAGE/config/adaptive_triggers/"
+cp "$ROOT/sd/config.ini" "$STAGE/config/dualsensefx/"
+cp -R "$ROOT/sd/games" "$STAGE/config/dualsensefx/"
 find "$STAGE" -name '.DS_Store' -delete
 
 mkdir -p "$OUT_DIR"
-OUT="$OUT_DIR/DualsenseFX-BotW-$VERSION.zip"
+OUT="$OUT_DIR/DualsenseFX-$VERSION.zip"
 rm -f "$OUT"
 (cd "$STAGE" && zip -qrX "$OUT" atmosphere switch config)
 echo "$OUT"

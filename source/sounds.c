@@ -19,11 +19,7 @@
 
 void LogLine(const char *fmt, ...);
 void LogVerbose(const char *fmt, ...);
-bool BotwInGame(const BotwState *state);
 
-#define SOUND_ARCHIVE_PLAYER   0x2CC1670
-#define SAP_WAVE_POOL          0x128
-#define WAVE_SOUND_VTABLE      0x2C17828
 #define WAVE_SOUND_SIZE        0x3A0
 #define WAVE_SOUND_COUNT       64
 #define WAVE_FREE              0x100
@@ -95,6 +91,7 @@ typedef struct {
     s16 pattern;
 } CacheEntry;
 
+static u64 g_sap_offset, g_pool_field, g_vtable_offset;  // from the game profile, 0 = no sound haptics
 static u64 g_main_base;
 static u64 g_pool;
 static u64 g_check_tick;
@@ -111,18 +108,31 @@ void SoundsReset(void) {
     g_serials_valid = false;
 }
 
+void SoundsConfigure(u64 sound_archive_player, u64 sound_pool, u64 wave_sound_vtable) {
+    g_sap_offset = sound_archive_player;
+    g_pool_field = sound_pool;
+    g_vtable_offset = wave_sound_vtable;
+    g_pool = 0;
+    g_check_tick = 0;
+    SoundsReset();
+}
+
 void SoundsUpdate(const DmntCheatProcessMetadata *meta) {
+    if (g_sap_offset == 0) {
+        g_pool = 0;
+        return;
+    }
     u64 now = armGetSystemTick();
     if (now < g_check_tick && meta->main_nso_extents.base == g_main_base) {
         return;
     }
     g_check_tick = now + armNsToTicks(5000 * 1000000ULL);
     u64 base = meta->main_nso_extents.base, sap = 0, pool = 0, first = 0, last = 0;
-    bool ok = R_SUCCEEDED(dmntchtReadCheatProcessMemory(base + SOUND_ARCHIVE_PLAYER, &sap, sizeof(sap))) && sap != 0 &&
-              R_SUCCEEDED(dmntchtReadCheatProcessMemory(sap + SAP_WAVE_POOL, &pool, sizeof(pool))) && pool != 0 &&
+    bool ok = R_SUCCEEDED(dmntchtReadCheatProcessMemory(base + g_sap_offset, &sap, sizeof(sap))) && sap != 0 &&
+              R_SUCCEEDED(dmntchtReadCheatProcessMemory(sap + g_pool_field, &pool, sizeof(pool))) && pool != 0 &&
               R_SUCCEEDED(dmntchtReadCheatProcessMemory(pool, &first, sizeof(first))) &&
               R_SUCCEEDED(dmntchtReadCheatProcessMemory(pool + (WAVE_SOUND_COUNT - 1) * WAVE_SOUND_SIZE, &last, sizeof(last))) &&
-              first == base + WAVE_SOUND_VTABLE && last == base + WAVE_SOUND_VTABLE;
+              first == base + g_vtable_offset && last == base + g_vtable_offset;
     if (!ok) {
         pool = 0;
     }
@@ -254,6 +264,10 @@ static void ParseRuleLine(char *line, u32 *bad) {
 void SoundsLoadRules(const char *path, bool forget_names) {
     g_num_rules = 0;
     u32 bad = 0;
+    if (path == NULL) {
+        SoundsReset();
+        return;
+    }
     FILE *f = fopen(path, "r");
     if (f == NULL) {
         FILE *out = fopen(path, "w");
@@ -406,8 +420,8 @@ static CacheEntry *Find(u64 fwav, u32 tag, bool *found) {
 
 // ---- events ----
 
-static void Play(BotwState *state, const CacheEntry *e) {
-    if (e->kind == Kind_Unknown || !BotwInGame(state) || state->menu_open) {
+static void Play(bool in_game, const CacheEntry *e) {
+    if (e->kind == Kind_Unknown || !in_game) {
         return;
     }
     if (e->kind == Kind_Step) {
@@ -422,7 +436,7 @@ static void Play(BotwState *state, const CacheEntry *e) {
     HapticsPlay(e->pattern, e->amount / 100.0f);
 }
 
-void SoundsPoll(BotwState *state) {
+void SoundsPoll(bool in_game) {
     if (g_pool == 0 || !g_haptic_settings.enabled ||
         R_FAILED(dmntchtReadCheatProcessMemory(g_pool, g_pool_buf, sizeof(g_pool_buf)))) {
         g_serials_valid = false;
@@ -469,7 +483,7 @@ void SoundsPoll(BotwState *state) {
                 ++g_unnamed;
             }
         }
-        Play(state, e);
+        Play(in_game, e);
     }
     g_serials_valid = true;
 }

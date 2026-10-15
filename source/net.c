@@ -31,6 +31,7 @@ NetSettings g_net_settings = { .enabled = false, .token = "", .port = 7330 };
 #define CLIENT_IDLE_MS    120000
 
 static const char *AllowedDirs[] = {
+    "sdmc:/config/dualsensefx/",
     "sdmc:/config/adaptive_triggers/",
     "sdmc:/config/MissionControl/",
     "sdmc:/atmosphere/contents/42000000000d5e00/",

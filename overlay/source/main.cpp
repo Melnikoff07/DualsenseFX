@@ -1,32 +1,39 @@
 // DualsenseFX: Tesla / Ultrahand overlay for the adaptive_triggers settings.
-// It only edits sdmc:/config/adaptive_triggers/config.ini; the sysmodule notices the change and applies it within
-// a second, no reboot needed.
+// It only edits files in sdmc:/config/dualsensefx (config.ini, the games' game.ini and patterns.ini); the sysmodule
+// notices the change and applies it within a second, no reboot needed.
 #define TESLA_INIT_IMPL
 #include <tesla.hpp>
 
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <dirent.h>
 #include <string>
 #include <vector>
 
 namespace {
 
-constexpr const char *ConfigPath = "sdmc:/config/adaptive_triggers/config.ini";
-constexpr const char *ConfigTmp  = "sdmc:/config/adaptive_triggers/config.ini.tmp";
+constexpr const char *ConfigPath = "sdmc:/config/dualsensefx/config.ini";
+constexpr const char *GamesDir   = "sdmc:/config/dualsensefx/games";
+constexpr const char *CurrentGamePath = "sdmc:/config/dualsensefx/current_game.txt";
+constexpr const char *DefaultGame = "01007EF00011E000";   // Zelda: Breath of the Wild
 
 // Strength steps shown on the sliders, percent
 constexpr int Steps[] = { 0, 25, 50, 75, 100, 125, 150, 175, 200 };
 constexpr size_t NumSteps = sizeof(Steps) / sizeof(Steps[0]);
 
+// A "key = value" file (config.ini, game.ini) that keeps its comments when a value changes
 class Config {
 public:
-    void load() {
+    void load(const std::string &path = ConfigPath) {
+        m_path = path;
+        m_loaded = false;
         lines.clear();
-        FILE *f = std::fopen(ConfigPath, "r");
+        FILE *f = std::fopen(path.c_str(), "r");
         if (f == nullptr) {
             return;
         }
+        m_loaded = true;
         char buf[512];
         while (std::fgets(buf, sizeof(buf), f)) {
             std::string line(buf);
@@ -46,6 +53,27 @@ public:
             }
         }
         return fallback;
+    }
+
+    std::string getString(const std::string &key, const std::string &fallback) const {
+        for (const auto &line : lines) {
+            size_t n;
+            if (isKey(line, key, n)) {
+                std::string v = line.substr(n);
+                size_t c = v.find(';');
+                if (c != std::string::npos) {
+                    v.erase(c);
+                }
+                v.erase(0, v.find_first_not_of(" \t"));
+                v.erase(v.find_last_not_of(" \t\r") + 1);
+                return v;
+            }
+        }
+        return fallback;
+    }
+
+    bool loaded() const {
+        return m_loaded;
     }
 
     // Changes or adds "key=value" and writes the file (temporary file first, so the module never sees half of it)
@@ -68,6 +96,8 @@ public:
 
 private:
     std::vector<std::string> lines;
+    std::string m_path = ConfigPath;
+    bool m_loaded = false;
 
     // "key = value" or "key=value" outside a comment; n gets the index of the value
     static bool isKey(const std::string &line, const std::string &key, size_t &n) {
@@ -85,7 +115,8 @@ private:
     }
 
     void save() {
-        FILE *f = std::fopen(ConfigTmp, "w");
+        std::string tmp = m_path + ".tmp";
+        FILE *f = std::fopen(tmp.c_str(), "w");
         if (f == nullptr) {
             return;
         }
@@ -94,8 +125,8 @@ private:
             std::fputc('\n', f);
         }
         std::fclose(f);
-        std::remove(ConfigPath);
-        std::rename(ConfigTmp, ConfigPath);
+        std::remove(m_path.c_str());
+        std::rename(tmp.c_str(), m_path.c_str());
     }
 };
 
@@ -111,8 +142,34 @@ size_t StepIndex(int percent) {
     return best;
 }
 
-constexpr const char *PatternsPath = "sdmc:/config/adaptive_triggers/patterns.ini";
-constexpr const char *PatternsTmp  = "sdmc:/config/adaptive_triggers/patterns.ini.tmp";
+// The game the module is attached to (it writes current_game.txt: program id, name), or none
+struct CurrentGame {
+    std::string id, name;
+};
+
+CurrentGame ReadCurrentGame() {
+    CurrentGame g;
+    FILE *f = std::fopen(CurrentGamePath, "r");
+    if (f == nullptr) {
+        return g;
+    }
+    char buf[128];
+    if (std::fgets(buf, sizeof(buf), f)) {
+        g.id = buf;
+        g.id.erase(g.id.find_last_not_of("\r\n ") + 1);
+    }
+    if (std::fgets(buf, sizeof(buf), f)) {
+        g.name = buf;
+        g.name.erase(g.name.find_last_not_of("\r\n ") + 1);
+    }
+    std::fclose(f);
+    return g;
+}
+
+// Per-event sliders edit the running game's patterns.ini, or BotW's while no game runs
+std::string PatternsPathFor(const std::string &id) {
+    return std::string(GamesDir) + "/" + (id.empty() ? DefaultGame : id) + "/patterns.ini";
+}
 
 // patterns.ini sections and their per-pattern "strength =" lines (the module applies them within a second)
 class Patterns {
@@ -126,10 +183,11 @@ public:
     };
     std::vector<Section> sections;
 
-    void load() {
+    void load(const std::string &path) {
+        m_path = path;
         lines.clear();
         sections.clear();
-        FILE *f = std::fopen(PatternsPath, "r");
+        FILE *f = std::fopen(path.c_str(), "r");
         if (f == nullptr) {
             return;
         }
@@ -193,9 +251,11 @@ public:
 
 private:
     std::vector<std::string> lines;
+    std::string m_path;
 
     void save() {
-        FILE *f = std::fopen(PatternsTmp, "w");
+        std::string tmp = m_path + ".tmp";
+        FILE *f = std::fopen(tmp.c_str(), "w");
         if (f == nullptr) {
             return;
         }
@@ -204,8 +264,8 @@ private:
             std::fputc('\n', f);
         }
         std::fclose(f);
-        std::remove(PatternsPath);
-        std::rename(PatternsTmp, PatternsPath);
+        std::remove(m_path.c_str());
+        std::rename(tmp.c_str(), m_path.c_str());
     }
 };
 
@@ -232,8 +292,9 @@ public:
     GroupGui(std::string group, std::string title) : m_group(std::move(group)), m_title(std::move(title)) {}
 
     tsl::elm::Element *createUI() override {
-        g_patterns.load();
-        auto *frame = new tsl::elm::OverlayFrame("DualsenseFX", m_title);
+        CurrentGame game = ReadCurrentGame();
+        g_patterns.load(PatternsPathFor(game.id));
+        auto *frame = new tsl::elm::OverlayFrame("DualsenseFX", m_title + (game.name.empty() ? "" : " \u2022 " + game.name));
         auto *list = new tsl::elm::List();
         for (const auto &s : g_patterns.sections) {
             if (s.group != m_group) {
@@ -253,6 +314,41 @@ public:
 
 private:
     std::string m_group, m_title;
+};
+
+// The installed game profiles, each can be turned off (enabled = in its game.ini)
+class GamesGui : public tsl::Gui {
+public:
+    tsl::elm::Element *createUI() override {
+        auto *frame = new tsl::elm::OverlayFrame("DualsenseFX", "Games");
+        auto *list = new tsl::elm::List();
+        DIR *dir = opendir(GamesDir);
+        if (dir != nullptr) {
+            while (struct dirent *e = readdir(dir)) {
+                if (e->d_name[0] == '.') {
+                    continue;
+                }
+                std::string ini = std::string(GamesDir) + "/" + e->d_name + "/game.ini";
+                Config game;
+                game.load(ini);
+                if (!game.loaded()) {
+                    continue;
+                }
+                std::string name = game.getString("name", e->d_name);
+                auto *toggle = new tsl::elm::ToggleListItem(name, game.get("enabled", 1) != 0);
+                toggle->setStateChangedListener([ini](bool state) {
+                    Config g;
+                    g.load(ini);
+                    g.set("enabled", state ? 1 : 0);
+                });
+                list->addItem(toggle);
+            }
+            closedir(dir);
+        }
+        list->addItem(new tsl::elm::CategoryHeader("A game is used when its folder in config/dualsensefx/games has a game.ini", true));
+        frame->setContent(list);
+        return frame;
+    }
 };
 
 // A header with the setting's name and a slider with Off / 25% ... 200%
@@ -291,8 +387,19 @@ class MainGui : public tsl::Gui {
 public:
     tsl::elm::Element *createUI() override {
         g_config.load();
-        auto *frame = new tsl::elm::OverlayFrame("DualsenseFX", "Zelda: Breath of the Wild 1.6.0");
+        CurrentGame game = ReadCurrentGame();
+        auto *frame = new tsl::elm::OverlayFrame("DualsenseFX", game.name.empty() ? "No game with a profile running" : game.name);
         auto *list = new tsl::elm::List();
+
+        auto *games = new tsl::elm::ListItem("Games", "\u203A");
+        games->setClickListener([](u64 keys) {
+            if (keys & HidNpadButton_A) {
+                tsl::changeTo<GamesGui>();
+                return true;
+            }
+            return false;
+        });
+        list->addItem(games);
 
         list->addItem(new tsl::elm::CategoryHeader("Output"));
         auto *output = new tsl::elm::NamedStepTrackBar("↔", { "Off", "DualSense", "Joy-Con" });
