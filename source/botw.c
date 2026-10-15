@@ -611,6 +611,12 @@ bool BotwComputeEffects(BotwState *state, TriggerEffects *out) {
         HapticsStopAll();
         return true;
     }
+    // Surfing ends on its own, whatever the trigger settings (with the triggers off this check was skipped and the
+    // surf texture never stopped)
+    if (state->surfing && (now >= state->surf_until_tick || state->bow_state != 0 || !state->equipped[BotwSlot_Shield].present)) {
+        SetSurfing(state, false, now >= state->surf_until_tick ? "no shield wear for a while" : "bow or no shield");
+    }
+
     if (!g_botw_settings.triggers) {
         // Adaptive triggers turned off: plain triggers, haptic textures still follow the game
         HapticsSetLoop(HapticLoop_BowTension, state->bow_state == 2);
@@ -649,9 +655,6 @@ bool BotwComputeEffects(BotwState *state, TriggerEffects *out) {
     }
 
     // Surfing: continuous light gravel-like rumble on both triggers
-    if (state->surfing && (now >= state->surf_until_tick || state->bow_state != 0 || !shield->present)) {
-        SetSurfing(state, false, now >= state->surf_until_tick ? "no shield wear for a while" : "bow or no shield");
-    }
     if (state->surfing && g_botw_settings.surf_rumble_strength > 0) {
         out->right = TriggerEffectVibration(0, g_botw_settings.surf_rumble_strength, 50);
         out->left  = TriggerEffectVibration(0, g_botw_settings.surf_rumble_strength, 50);
