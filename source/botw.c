@@ -94,7 +94,6 @@ void LogVerbose(const char *fmt, ...);
 #define PLAYER_TOOL_NAME       0xD44
 #define RUNE_LOCK_DEDUP_NS     (500 * 1000000ULL)
 #define PLAYER_GROUND_MATERIAL 0x1CA8
-#define LANDING_MIN_NS         (900 * 1000000ULL)   // shorter airborne stretches are ordinary jumps
 #define BREAK_DEDUP_NS         (1000 * 1000000ULL)
 
 #define SCAN_INTERVAL_NS       (500 * 1000000ULL)
@@ -403,12 +402,9 @@ static void UpdateActionFlags(BotwState *state) {
         u64 now = armGetSystemTick();
         if (flags & ACTION_AIRBORNE) {
             state->airborne_since_tick = now;
-        } else if (state->airborne_since_tick != 0) {
-            // Landed after a real fall (also after gliding: the paraglider shows up as airborne too)
-            u64 airborne_ns = armTicksToNs(now - state->airborne_since_tick);
-            if (airborne_ns >= LANDING_MIN_NS && !state->surfing && InGame(state)) {
-                HapticsPlay(HapticPattern_Landing, airborne_ns / 2500000000.0f);
-            }
+        } else {
+            // No landing effect here: the flag is also on while sprinting (releasing the sprint felt like a hard
+            // landing). Landings come from the game's landing sounds (sounds.c).
             state->airborne_since_tick = 0;
         }
     }
@@ -477,6 +473,12 @@ static void UpdatePlayer(BotwState *state, const DmntCheatProcessMetadata *meta)
         if (state->stamina > 1.0f && stamina <= 1.0f && stamina >= 0.0f && InGame(state)) {
             LogVerbose("botw: stamina ran out");
             HapticsPlay(HapticPattern_StaminaEmpty, 1.0f);
+        }
+        // Refilling: rising for a few polls in a row (it rises every frame while it refills)
+        if (stamina > state->stamina + 0.01f && state->stamina >= 0.0f) {
+            state->stamina_rising = state->stamina_rising < 255 ? state->stamina_rising + 1 : 255;
+        } else {
+            state->stamina_rising = 0;
         }
         state->stamina = stamina;
     }
@@ -618,6 +620,7 @@ bool BotwComputeEffects(BotwState *state, TriggerEffects *out) {
         HapticsSetLoop(HapticLoop_BowTension, state->bow_state == 2);
         HapticsSetLoop(HapticLoop_Surf, state->surfing);
         HapticsSetLoop(HapticLoop_Magnesis, state->magnesis_held);
+        HapticsSetLoop(HapticLoop_StaminaRefill, state->stamina_rising >= 3);
         return true;
     }
 
@@ -662,6 +665,7 @@ bool BotwComputeEffects(BotwState *state, TriggerEffects *out) {
     HapticsSetLoop(HapticLoop_BowTension, state->bow_state == 2 && bow->present && arrow->present);
     HapticsSetLoop(HapticLoop_Surf, state->surfing);
     HapticsSetLoop(HapticLoop_Magnesis, state->magnesis_held);
+    HapticsSetLoop(HapticLoop_StaminaRefill, state->stamina_rising >= 3);
 
     // Short event effects override the profile
     for (int t = 0; t < 2; ++t) {

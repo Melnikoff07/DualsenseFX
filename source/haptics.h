@@ -45,6 +45,7 @@ typedef enum {
     HapticLoop_BowTension,
     HapticLoop_Surf,
     HapticLoop_Magnesis,        // hum while an object is held
+    HapticLoop_StaminaRefill,   // faint texture while the stamina wheel refills
     HapticLoop_Count,
 } HapticLoop;
 

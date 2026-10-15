@@ -44,6 +44,7 @@ typedef struct {
     TriggerEffect pulse_effect[2];
     bool effects_off_logged;
     float stamina;          // 1800 = one wheel, -1 unreadable
+    u8 stamina_rising;      // polls in a row the stamina went up (refilling)
     u64 airborne_since_tick;
     u64 break_tick;         // last weapon break pattern, to play it once
     u64 heartbeat_second;   // last second a felt heartbeat was played

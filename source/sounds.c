@@ -155,6 +155,7 @@ static void Classify(const char *name, CacheEntry *e) {
             e->kind = Kind_Jump;
         } else if (StartsWith(what, "Land")) {
             e->kind = Kind_Land;
+            e->amount = strstr(what, "Weak") != NULL ? 0 : 100;   // 0 = light landing, else a real fall
         } else if (StartsWith(what, "Climb")) {
             e->kind = Kind_Climb;
             e->left = strstr(what, "L0") != NULL;
@@ -271,12 +272,16 @@ static void Play(BotwState *state, const CacheEntry *e) {
         return;
     }
     g_last_kind_tick[e->kind] = now;
+    if (e->kind == Kind_Land && e->amount == 100) {
+        HapticsPlay(HapticPattern_Landing, 1.0f);
+        return;
+    }
     static const HapticPattern Patterns[Kind_Count] = {
         [Kind_Jump] = HapticPattern_Jump, [Kind_Land] = HapticPattern_LandSoft, [Kind_Climb] = HapticPattern_ClimbGrip,
         [Kind_WaterIn] = HapticPattern_WaterSplash, [Kind_Swim] = HapticPattern_SwimStroke, [Kind_Chest] = HapticPattern_ChestOpen,
         [Kind_ItemGet] = HapticPattern_ItemGet, [Kind_Roll] = HapticPattern_Roll, [Kind_CrateBreak] = HapticPattern_CrateBreak,
     };
-    HapticsPlay(Patterns[e->kind], e->amount / 100.0f);
+    HapticsPlay(Patterns[e->kind], e->kind == Kind_Land ? 1.0f : e->amount / 100.0f);
 }
 
 void SoundsPoll(BotwState *state) {

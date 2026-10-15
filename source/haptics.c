@@ -130,7 +130,7 @@ static const PatternDef Patterns[HapticPattern_Count] = {
     [HapticPattern_Jump] = { "jump", HapticGroup_World, 1, {
         { 0,      70,  70,  80,  60,   0,   1,  10,  60 },  // push off
     }},
-    [HapticPattern_LandSoft] = { "land", HapticGroup_World, 1, {
+    [HapticPattern_LandSoft] = { "land", HapticGroup_Body, 1, {
         { 0,     110, 110,  60,  45,   0,   2,  15, 110 },
     }},
     [HapticPattern_ClimbGrip] = { "climb grip", HapticGroup_World, 1, {
@@ -180,6 +180,9 @@ static const LoopDef Loops[HapticLoop_Count] = {
         { LOOP,         36, 36,  55,  60,   0,  300, 0, 0 },  // magnetic hum (tuned down with the user)
         { NOISE | LOOP, 20, 20,  90,  90,   0,  300, 0, 0 },
     }},
+    [HapticLoop_StaminaRefill] = { HapticGroup_Body, 1, { 5 }, {
+        { LOOP,         12, 12,  45,  50,   0,  400, 0, 0 },  // barely there, like a calm pulse under the hand
+    }},
 };
 
 // Footstep taps by ground material (index into Undefined,Soil,Stone,Sand,Metal,WireNet,Grass,Wood,Water,Snow,...)
@@ -201,7 +204,7 @@ static const StepDef Steps[] = {
     [14] = { 1, {{ NOISE, 30, 30, 200, 180, 0, 10, 15,  60 }}},                                           // cloth, carpet: muffled
 };
 
-#define FIRST_ONESHOT_SLOT 5
+#define FIRST_ONESHOT_SLOT 6
 #define SLOT_COUNT         12   // MissionControl HapticVoiceSlots
 
 static bool g_available;
