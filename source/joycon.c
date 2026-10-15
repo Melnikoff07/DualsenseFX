@@ -6,14 +6,16 @@
 // Every 5 ms the voices (same meaning as the DualSense ones in MissionControl: slot, sine or noise, amplitude per hand,
 // frequency sweep, delay / attack / hold / decay with a quadratic tail, loop) are turned into one HD rumble value per
 // motor: voices below 240 Hz go to the low band, the others to the high band, amplitudes add up, the frequency is the
-// amplitude-weighted mean; noise is a sine whose frequency and amplitude jitter every tick. The game's own rumble is
-// read back before every send and the stronger of the two plays in each band; when our voices end the game's value
-// is put back. Nothing is sent while no voice plays.
+// amplitude-weighted mean; noise is a sine whose frequency and amplitude jitter every tick. While our voices play they
+// own the motors; when they end a zero value is sent once and the game's own rumble takes over again with its next
+// value. Nothing is sent while no voice plays. (Reading the value back to mix with the game does not work: the
+// system rounds the amplitudes, 0.6 sent reads 0.5, so our own last value looked like the game's and kept playing.)
 #include <math.h>
 #include <string.h>
 #include "joycon.h"
 
 void LogLine(const char *fmt, ...);
+void LogVerbose(const char *fmt, ...);
 
 #define SLOTS        12
 #define TICK_MS      5
@@ -37,8 +39,6 @@ static HidVibrationDeviceHandle g_handles[2];
 static u32 g_num_handles;
 static u32 g_style;                 // style the handles were made for, 0 = none
 static HidNpadIdType g_id;
-static HidVibrationValue g_game[2]; // the game's latest value per motor
-static HidVibrationValue g_sent[2]; // what we sent last
 static bool g_playing;
 
 static float Rand01(void) {
@@ -48,11 +48,6 @@ static float Rand01(void) {
 
 static float Clamp(float v, float lo, float hi) {
     return v < lo ? lo : v > hi ? hi : v;
-}
-
-static bool SameValue(const HidVibrationValue *a, const HidVibrationValue *b) {
-    return fabsf(a->amp_low - b->amp_low) < 0.001f && fabsf(a->amp_high - b->amp_high) < 0.001f &&
-           fabsf(a->freq_low - b->freq_low) < 0.5f && fabsf(a->freq_high - b->freq_high) < 0.5f;
 }
 
 // The controller in use: attached Joy-Cons, else player 1 (Joy-Con pair or Pro Controller)
@@ -76,8 +71,6 @@ static void RefreshHandles(void) {
     if (style != 0 && R_SUCCEEDED(hidInitializeVibrationDevices(g_handles, 2, id, (HidNpadStyleTag)style))) {
         g_num_handles = 2;
     }
-    memset(g_game, 0, sizeof(g_game));
-    memset(g_sent, 0, sizeof(g_sent));
     LogLine("joycon: %s, %u motors", style == HidNpadStyleTag_NpadHandheld ? "attached Joy-Cons" :
             style == HidNpadStyleTag_NpadJoyDual ? "Joy-Con pair" : style == HidNpadStyleTag_NpadFullKey ? "Pro Controller" : "no controller",
             g_num_handles);
@@ -151,27 +144,14 @@ static void Thread_(void *arg) {
         }
         HidVibrationValue ours[2];
         bool playing = Mix(ours);
-        if (g_num_handles == 2 && (playing || g_playing)) {
-            HidVibrationValue send[2];
-            for (int m = 0; m < 2; ++m) {
-                // A value that is not ours came from the game
-                HidVibrationValue actual;
-                if (R_SUCCEEDED(hidGetActualVibrationValue(g_handles[m], &actual)) && !SameValue(&actual, &g_sent[m])) {
-                    g_game[m] = actual;
-                }
-                if (playing) {
-                    const HidVibrationValue *g = &g_game[m];
-                    send[m].amp_low   = fmaxf(ours[m].amp_low, g->amp_low);
-                    send[m].freq_low  = ours[m].amp_low >= g->amp_low ? ours[m].freq_low : g->freq_low;
-                    send[m].amp_high  = fmaxf(ours[m].amp_high, g->amp_high);
-                    send[m].freq_high = ours[m].amp_high >= g->amp_high ? ours[m].freq_high : g->freq_high;
-                } else {
-                    send[m] = g_game[m];    // our voices ended: give the motor back to the game
-                }
-            }
-            if (R_SUCCEEDED(hidSendVibrationValues(g_handles, send, 2))) {
-                memcpy(g_sent, send, sizeof(g_sent));
-            }
+        if (g_num_handles == 2 && playing) {
+            hidSendVibrationValues(g_handles, ours, 2);
+        } else if (g_num_handles == 2 && g_playing) {
+            static const HidVibrationValue Zero[2] = { { 0, 160.0f, 0, 320.0f }, { 0, 160.0f, 0, 320.0f } };
+            hidSendVibrationValues(g_handles, Zero, 2);
+        }
+        if (playing != g_playing) {
+            LogVerbose("joycon: %s", playing ? "playing" : "stopped");
         }
         g_playing = playing;
         mutexUnlock(&g_lock);
