@@ -2,6 +2,7 @@
 """Client for the adaptive_triggers network control (net=1 in config.ini).
 
   swnet.py discover                      find the console on the local network
+  swnet.py doctor                        why the console can't be reached (token, network, port, scan)
   swnet.py cmd "<command>"               run one command (try "help"), text replies are printed
   swnet.py read <addr> <len> <out.bin>   save game memory to a file
   swnet.py get <remote> <local>          download a project file
@@ -108,7 +109,8 @@ class Switch:
         host = host or os.environ.get("SWNET_HOST") or find_console()
         token = token or os.environ.get("SWNET_TOKEN") or _conf("net-token")
         if not host:
-            raise SystemExit("console not found (is net=1 set and the console on the same Wi-Fi?)")
+            raise SystemExit("console not found: run `swnet.py doctor` to see which step fails "
+                             "(usually the console sleeps or is off; ask the user to wake it)")
         if not token:
             raise SystemExit("set SWNET_TOKEN to net_token from config.ini (or put it in ~/.config/dualsensefx/net-token)")
         self.host = host
@@ -171,11 +173,55 @@ class Switch:
         return status
 
 
+def doctor():
+    """Step by step: what is set up on this computer and where the connection stops"""
+    token = os.environ.get("SWNET_TOKEN") or _conf("net-token")
+    print("token:", "found" if token else f"MISSING (~/.config/dualsensefx/net-token or SWNET_TOKEN)")
+    host = os.environ.get("SWNET_HOST") or remembered_host()
+    print("last known console:", host or "none")
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("192.0.2.1", 9))
+        mine = probe.getsockname()[0]
+        print("this computer:", mine)
+        if host and mine.rsplit(".", 1)[0] != host.rsplit(".", 1)[0]:
+            print(f"  -> this computer is not on the console's network ({host.rsplit('.', 1)[0]}.x): another Wi-Fi, "
+                  "or a VPN takes the traffic; the console can only be reached from the home network")
+    except OSError as e:
+        print("this computer: no network route:", e)
+    finally:
+        probe.close()
+    if host:
+        s = socket.socket()
+        s.settimeout(3)
+        try:
+            s.connect((host, PORT))
+            print(f"{host}:{PORT}: open")
+            s.close()
+        except OSError as e:
+            s.close()
+            print(f"{host}:{PORT}: {e!r}")
+            if isinstance(e, PermissionError):
+                print("  -> the network is blocked for this process (sandbox?): run without the sandbox / on the user's Mac")
+            elif isinstance(e, ConnectionRefusedError):
+                print("  -> the console answers but the server is not listening: just woke up (wait ~30 s), net=0, "
+                      "or the module did not start (check log.old.txt after the next working connection)")
+            else:
+                print("  -> no answer: the console sleeps or is off (Wi-Fi is off in sleep), or got another address")
+    found = discover() or scan_subnet()
+    print("discovery / subnet scan:", found or "nothing on this /24 network")
+    if found:
+        remember_host(found)
+
+
 def main(argv):
     if len(argv) < 2:
         print(__doc__)
         return 1
     what = argv[1]
+    if what == "doctor":
+        doctor()
+        return 0
     if what == "discover":
         host = find_console()
         print(host or "not found")
