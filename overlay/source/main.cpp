@@ -290,10 +290,11 @@ public:
         auto add = [&](const std::string &label, const std::string &action) {
             auto *item = new tsl::elm::ListItem(label);
             std::string id = m_id, name = m_name;
-            item->setClickListener([id, name, action](u64 keys) {
+            // No goBack() here: it would delete this page while its handler runs (B goes back safely)
+            item->setClickListener([item, label, id, name, action](u64 keys) {
                 if (keys & HidNpadButton_A) {
                     AssignSound(id, name, action);
-                    tsl::goBack();
+                    item->setText("\u2713 " + label + " (saved, B to go back)");
                     return true;
                 }
                 return false;
@@ -337,40 +338,53 @@ void SetRecording(bool on) {
     }
 }
 
-// The recorded sounds as they were when the page opened (nothing moves), newest first, with how long ago they played
+// The recorded sounds as they were when the page opened (nothing moves), newest first, with how long ago they played.
+// Refresh and the filter only swap the rows below them: the list removes and adds items between frames, so the
+// element whose handler runs is never deleted under it (rebuilding the whole page from its handler crashed).
 class RecordedGui : public tsl::Gui {
 public:
-    RecordedGui(std::string id, bool unassigned_only) : m_id(std::move(id)), m_unassigned_only(unassigned_only) {}
+    explicit RecordedGui(std::string id) : m_id(std::move(id)) {}
 
     tsl::elm::Element *createUI() override {
         auto *frame = new tsl::elm::OverlayFrame("DualsenseFX", Recording() ? "Recorded sounds (recording)" : "Recorded sounds");
-        auto *list = new tsl::elm::List();
+        m_list = new tsl::elm::List();
 
         auto *refresh = new tsl::elm::ListItem("Refresh", "↻");
-        std::string id = m_id;
-        bool only = m_unassigned_only;
-        refresh->setClickListener([id, only](u64 keys) {
+        refresh->setClickListener([this](u64 keys) {
             if (keys & HidNpadButton_A) {
-                tsl::goBack();
-                tsl::changeTo<RecordedGui>(id, only);
+                fill();
                 return true;
             }
             return false;
         });
-        list->addItem(refresh);
-        auto *filter = new tsl::elm::ToggleListItem("Only sounds without an effect", only);
-        filter->setStateChangedListener([id](bool state) {
-            tsl::goBack();
-            tsl::changeTo<RecordedGui>(id, state);
+        m_list->addItem(refresh);
+        auto *filter = new tsl::elm::ToggleListItem("Only sounds without an effect", m_unassigned_only);
+        filter->setStateChangedListener([this](bool state) {
+            m_unassigned_only = state;
+            fill();
         });
-        list->addItem(filter);
+        m_list->addItem(filter);
+        fill();
+        frame->setContent(m_list);
+        return frame;
+    }
 
+private:
+    std::string m_id;
+    bool m_unassigned_only = false;
+    tsl::elm::List *m_list = nullptr;
+    std::vector<tsl::elm::Element *> m_rows;
+
+    void fill() {
+        for (auto *row : m_rows) {
+            m_list->removeItem(row);
+        }
+        m_rows.clear();
         FILE *f = std::fopen(MonitorFile, "r");
-        size_t shown = 0;
         if (f != nullptr) {
             u64 now = armGetSystemTick(), freq = armGetSystemTickFreq();
             char buf[256];
-            while (shown < 120 && std::fgets(buf, sizeof(buf), f)) {
+            while (m_rows.size() < 120 && std::fgets(buf, sizeof(buf), f)) {
                 std::string l(buf);
                 l.erase(l.find_last_not_of("\r\n") + 1);
                 size_t t1 = l.find('\t'), t2 = l.find('\t', t1 + 1), t3 = l.find('\t', t2 + 1);
@@ -387,6 +401,7 @@ public:
                 std::string when = ago < 60 ? std::to_string(ago) + "s" : ago < 3600 ? std::to_string(ago / 60) + "m" : ">1h";
                 auto *item = new tsl::elm::ListItem(name);
                 item->setValue((assigned ? "✓ " : "") + when, assigned);
+                std::string id = m_id;
                 item->setClickListener([id, name](u64 keys) {
                     if (keys & HidNpadButton_A) {
                         tsl::changeTo<AssignGui>(id, name);
@@ -394,22 +409,18 @@ public:
                     }
                     return false;
                 });
-                list->addItem(item);
-                ++shown;
+                m_list->addItem(item);
+                m_rows.push_back(item);
             }
             std::fclose(f);
         }
-        if (shown == 0) {
-            list->addItem(new tsl::elm::CategoryHeader(Recording() ? "Nothing yet: play a bit, then Refresh" :
-                                                       "Turn on Record sounds, play, then come back", true));
+        if (m_rows.empty()) {
+            auto *hint = new tsl::elm::CategoryHeader(Recording() ? "Nothing yet: play a bit, then Refresh" :
+                                                      "Turn on Record sounds, play, then come back", true);
+            m_list->addItem(hint);
+            m_rows.push_back(hint);
         }
-        frame->setContent(list);
-        return frame;
     }
-
-private:
-    std::string m_id;
-    bool m_unassigned_only;
 };
 
 // Per-event sliders edit the running game's patterns.ini, or BotW's while no game runs
@@ -659,7 +670,7 @@ public:
             std::string id = game.id;
             recorded->setClickListener([id](u64 keys) {
                 if (keys & HidNpadButton_A) {
-                    tsl::changeTo<RecordedGui>(id, false);
+                    tsl::changeTo<RecordedGui>(id);
                     return true;
                 }
                 return false;
