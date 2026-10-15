@@ -423,6 +423,27 @@ static void LoadPatternsAndRules(bool forget_names) {
     SoundsLoadRules(g_sounds_path[0] ? g_sounds_path : NULL, forget_names);
 }
 
+// The overlay's sound monitor page creates monitor.on while it is open
+static void UpdateMonitor(void) {
+    static u64 next_check, next_write;
+    static bool on;
+    u64 now = armGetSystemTick();
+    if (now >= next_check) {
+        next_check = now + armNsToTicks(1000000000ULL);
+        struct stat st;
+        bool want = stat(DFX_DIR "/monitor.on", &st) == 0;
+        if (want != on) {
+            on = want;
+            SoundsSetMonitor(on);
+            LogLine("sound monitor %s", on ? "on" : "off");
+        }
+    }
+    if (on && now >= next_write) {
+        next_write = now + armNsToTicks(500000000ULL);
+        SoundsMonitorWrite(DFX_DIR "/monitor.txt");
+    }
+}
+
 static void CheckConfigChanged(void) {
     static u64 next_tick;
     static WatchedFile config = { CONFIG_PATH, 0, false }, patterns = { g_patterns_path, 0, false }, sounds = { g_sounds_path, 0, false };
@@ -613,6 +634,10 @@ static void Update(GameSession *s) {
     bool running = GetCurrentApplication(&pid, &program_id);
 
     // Game exited or was restarted
+    if (!running && g_no_profile_pid != 0) {
+        g_no_profile_pid = 0;
+        ProfileSetCurrent(NULL);
+    }
     if (s->state != SessionState_Idle && (!running || pid != s->pid)) {
         LogLine("%s (pid %lu) is gone, releasing", s->profile.name, s->pid);
         CloseSession(s);
@@ -627,6 +652,7 @@ static void Update(GameSession *s) {
         if (!ProfileLoad(program_id, &s->profile) || !s->profile.enabled) {
             if (pid != g_no_profile_pid) {
                 LogLine("application %016lX has %s, not attaching", program_id, s->profile.name[0] ? "its profile turned off" : "no profile");
+                ProfileSetCurrentWithout(program_id);    // the overlay offers to create one
             }
             g_no_profile_pid = pid;
             g_no_profile_recheck = armGetSystemTick() + armNsToTicks(5000000000ULL);
@@ -791,6 +817,7 @@ int main(int argc, char **argv) {
         };
         NetUpdate(&net);
         CheckConfigChanged();
+        UpdateMonitor();
         if (session.state == SessionState_Active) {
             BotwPollFast(&session.botw);
             BotwState *b = &session.botw;

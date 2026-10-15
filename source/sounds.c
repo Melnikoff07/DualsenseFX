@@ -29,7 +29,9 @@ void LogVerbose(const char *fmt, ...);
 
 #define BARS_SEARCH_BACK       0x400000   // packages seen so far start within 4 MB before their FWAVs
 #define BARS_CHUNK             0x10000
-#define CACHE_SIZE             2048
+#define CACHE_SIZE             1024
+#define NAME_SIZE              40
+#define MONITOR_ENTRIES        48
 #define REPEAT_NS              (100 * 1000000ULL)  // layered variants of one sound start together
 
 typedef enum {
@@ -90,7 +92,73 @@ typedef struct {
     u8 amount;              // percent
     u8 left;
     s16 pattern;
+    char name[NAME_SIZE];   // the sound's name, or wav:<CRC32 of the file's first 256 bytes> when it has none
 } CacheEntry;
+
+// Sound monitor (the overlay shows it): the latest different sounds with how often they played and what they do
+typedef struct {
+    char name[NAME_SIZE];
+    u32 count;
+    u64 last_tick;
+    const CacheEntry *entry;
+} MonitorEntry;
+
+static bool g_monitor;
+static MonitorEntry g_mon[MONITOR_ENTRIES];
+
+static void MonitorNote(const CacheEntry *e) {
+    u64 now = armGetSystemTick();
+    MonitorEntry *oldest = &g_mon[0];
+    for (u32 i = 0; i < MONITOR_ENTRIES; ++i) {
+        MonitorEntry *m = &g_mon[i];
+        if (m->count && strcmp(m->name, e->name) == 0) {
+            ++m->count;
+            m->last_tick = now;
+            m->entry = e;
+            return;
+        }
+        if (m->last_tick < oldest->last_tick) {
+            oldest = m;
+        }
+    }
+    snprintf(oldest->name, sizeof(oldest->name), "%s", e->name);
+    oldest->count = 1;
+    oldest->last_tick = now;
+    oldest->entry = e;
+}
+
+void SoundsSetMonitor(bool on) {
+    if (on && !g_monitor) {
+        memset(g_mon, 0, sizeof(g_mon));
+    }
+    g_monitor = on;
+}
+
+void SoundsMonitorWrite(const char *path) {
+    FILE *f = fopen(path, "w");
+    if (f == NULL) {
+        return;
+    }
+    // Newest first
+    bool used[MONITOR_ENTRIES] = {0};
+    for (u32 n = 0; n < MONITOR_ENTRIES; ++n) {
+        int best = -1;
+        for (u32 i = 0; i < MONITOR_ENTRIES; ++i) {
+            if (!used[i] && g_mon[i].count && (best < 0 || g_mon[i].last_tick > g_mon[best].last_tick)) {
+                best = i;
+            }
+        }
+        if (best < 0) {
+            break;
+        }
+        used[best] = true;
+        const MonitorEntry *m = &g_mon[best];
+        const CacheEntry *e = m->entry;
+        const char *action = e->kind == Kind_Step ? "step" : e->kind == Kind_Pattern ? HapticsPatternName(e->pattern) : "-";
+        fprintf(f, "%u\t%s\t%s\n", m->count, m->name, action);
+    }
+    fclose(f);
+}
 
 static u64 g_sap_offset, g_pool_field, g_vtable_offset;  // from the game profile or found (atkfind.c)
 static u32 g_slot_size = 0x3A0, g_count = 64;
@@ -507,16 +575,24 @@ void SoundsPoll(bool in_game) {
             e->fwav = fwav;
             e->tag = tag;
             if (LookUpName(fwav, name, sizeof(name))) {
-                Classify(name, e);
                 ++g_resolved;
-                if (e->kind != Kind_Unknown) {
-                    LogVerbose("sounds: %s -> %s, material %u, %u%%", name, e->kind == Kind_Step ? "step" : HapticsPatternName(e->pattern), e->material, e->amount);
-                }
             } else {
+                // No name (no BARS package around it): a fingerprint of the sound file, the same every start
+                u8 head[0x100];
+                u32 crc = R_SUCCEEDED(dmntchtReadCheatProcessMemory(fwav, head, sizeof(head))) ? crc32Calculate(head, sizeof(head)) : tag;
+                snprintf(name, sizeof(name), "wav:%08X", crc);
                 ++g_unnamed;
+            }
+            snprintf(e->name, sizeof(e->name), "%.39s", name);
+            Classify(name, e);
+            if (e->kind != Kind_Unknown) {
+                LogVerbose("sounds: %s -> %s, material %u, %u%%", name, e->kind == Kind_Step ? "step" : HapticsPatternName(e->pattern), e->material, e->amount);
             }
         }
         Play(in_game, e);
+        if (g_monitor) {
+            MonitorNote(e);
+        }
     }
     g_serials_valid = true;
 }

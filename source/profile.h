@@ -31,8 +31,9 @@ void ProfileInstallDefaults(void);
 bool ProfileLoad(u64 program_id, GameProfile *out);
 bool ProfileBuildMatches(const GameProfile *p, const u8 *build_id);
 
-// current_game.txt tells the overlay which profile is in use (NULL: none)
+// current_game.txt tells the overlay which game runs: program id, name, "profile" or "none" (NULL: no game)
 void ProfileSetCurrent(const GameProfile *p);
+void ProfileSetCurrentWithout(u64 program_id);
 
 // Appends the found sound pool to game.ini, so the next start doesn't need to look for it
 void ProfileSaveSoundPool(GameProfile *p, u64 sap, u64 pool, u64 vtable, u32 slot_size, u32 slots);

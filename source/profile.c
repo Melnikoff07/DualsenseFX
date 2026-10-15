@@ -189,7 +189,15 @@ void ProfileSetCurrent(const GameProfile *p) {
     }
     FILE *f = fopen(DFX_DIR "/current_game.txt", "w");
     if (f) {
-        fprintf(f, "%016lX\n%s\n", p->program_id, p->name);
+        fprintf(f, "%016lX\n%s\nprofile\n", p->program_id, p->name);
+        fclose(f);
+    }
+}
+
+void ProfileSetCurrentWithout(u64 program_id) {
+    FILE *f = fopen(DFX_DIR "/current_game.txt", "w");
+    if (f) {
+        fprintf(f, "%016lX\n\nnone\n", program_id);
         fclose(f);
     }
 }
