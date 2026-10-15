@@ -322,70 +322,94 @@ private:
     std::string m_id, m_name;
 };
 
-// The game's latest sounds, newest first, refreshed twice a second while the page is open
-class MonitorGui : public tsl::Gui {
-public:
-    explicit MonitorGui(std::string id) : m_id(std::move(id)) {
+bool Recording() {
+    struct stat st;
+    return stat(MonitorOn, &st) == 0;
+}
+
+void SetRecording(bool on) {
+    if (on) {
         if (FILE *f = std::fopen(MonitorOn, "w")) {
             std::fclose(f);
         }
-    }
-    ~MonitorGui() override {
+    } else {
         std::remove(MonitorOn);
     }
+}
+
+// The recorded sounds as they were when the page opened (nothing moves), newest first, with how long ago they played
+class RecordedGui : public tsl::Gui {
+public:
+    RecordedGui(std::string id, bool unassigned_only) : m_id(std::move(id)), m_unassigned_only(unassigned_only) {}
 
     tsl::elm::Element *createUI() override {
-        auto *frame = new tsl::elm::OverlayFrame("DualsenseFX", "Sound monitor: play, then pick a sound");
+        auto *frame = new tsl::elm::OverlayFrame("DualsenseFX", Recording() ? "Recorded sounds (recording)" : "Recorded sounds");
         auto *list = new tsl::elm::List();
-        for (size_t i = 0; i < Rows; ++i) {
-            m_items[i] = new tsl::elm::ListItem(i == 0 ? "Waiting for sounds..." : "");
-            size_t row = i;
-            m_items[i]->setClickListener([this, row](u64 keys) {
-                if ((keys & HidNpadButton_A) && row < m_names.size()) {
-                    tsl::changeTo<AssignGui>(m_id, m_names[row]);
-                    return true;
+
+        auto *refresh = new tsl::elm::ListItem("Refresh", "↻");
+        std::string id = m_id;
+        bool only = m_unassigned_only;
+        refresh->setClickListener([id, only](u64 keys) {
+            if (keys & HidNpadButton_A) {
+                tsl::goBack();
+                tsl::changeTo<RecordedGui>(id, only);
+                return true;
+            }
+            return false;
+        });
+        list->addItem(refresh);
+        auto *filter = new tsl::elm::ToggleListItem("Only sounds without an effect", only);
+        filter->setStateChangedListener([id](bool state) {
+            tsl::goBack();
+            tsl::changeTo<RecordedGui>(id, state);
+        });
+        list->addItem(filter);
+
+        FILE *f = std::fopen(MonitorFile, "r");
+        size_t shown = 0;
+        if (f != nullptr) {
+            u64 now = armGetSystemTick(), freq = armGetSystemTickFreq();
+            char buf[256];
+            while (shown < 120 && std::fgets(buf, sizeof(buf), f)) {
+                std::string l(buf);
+                l.erase(l.find_last_not_of("\r\n") + 1);
+                size_t t1 = l.find('\t'), t2 = l.find('\t', t1 + 1), t3 = l.find('\t', t2 + 1);
+                if (t1 == std::string::npos || t2 == std::string::npos || t3 == std::string::npos) {
+                    continue;
                 }
-                return false;
-            });
-            list->addItem(m_items[i]);
+                u64 tick = std::strtoull(l.substr(t1 + 1, t2 - t1 - 1).c_str(), nullptr, 10);
+                std::string name = l.substr(t2 + 1, t3 - t2 - 1), action = l.substr(t3 + 1);
+                bool assigned = action != "-";
+                if (m_unassigned_only && assigned) {
+                    continue;
+                }
+                u64 ago = tick && now > tick ? (now - tick) / freq : 0;
+                std::string when = ago < 60 ? std::to_string(ago) + "s" : ago < 3600 ? std::to_string(ago / 60) + "m" : ">1h";
+                auto *item = new tsl::elm::ListItem(name);
+                item->setValue((assigned ? "✓ " : "") + when, assigned);
+                item->setClickListener([id, name](u64 keys) {
+                    if (keys & HidNpadButton_A) {
+                        tsl::changeTo<AssignGui>(id, name);
+                        return true;
+                    }
+                    return false;
+                });
+                list->addItem(item);
+                ++shown;
+            }
+            std::fclose(f);
+        }
+        if (shown == 0) {
+            list->addItem(new tsl::elm::CategoryHeader(Recording() ? "Nothing yet: play a bit, then Refresh" :
+                                                       "Turn on Record sounds, play, then come back", true));
         }
         frame->setContent(list);
         return frame;
     }
 
-    void update() override {
-        if (++m_frames % 30 != 0) {
-            return;
-        }
-        FILE *f = std::fopen(MonitorFile, "r");
-        if (f == nullptr) {
-            return;
-        }
-        m_names.clear();
-        char buf[256];
-        size_t row = 0;
-        while (row < Rows && std::fgets(buf, sizeof(buf), f)) {
-            std::string l(buf);
-            l.erase(l.find_last_not_of("\r\n") + 1);
-            size_t t1 = l.find('\t'), t2 = l.find('\t', t1 + 1);
-            if (t1 == std::string::npos || t2 == std::string::npos) {
-                continue;
-            }
-            std::string count = l.substr(0, t1), name = l.substr(t1 + 1, t2 - t1 - 1), action = l.substr(t2 + 1);
-            m_names.push_back(name);
-            m_items[row]->setText(name);
-            m_items[row]->setValue(action + " \u00D7" + count, action == "-");
-            ++row;
-        }
-        std::fclose(f);
-    }
-
 private:
-    static constexpr size_t Rows = 16;
     std::string m_id;
-    tsl::elm::ListItem *m_items[Rows] = {};
-    std::vector<std::string> m_names;
-    u32 m_frames = 0;
+    bool m_unassigned_only;
 };
 
 // Per-event sliders edit the running game's patterns.ini, or BotW's while no game runs
@@ -627,16 +651,20 @@ public:
             list->addItem(create);
         }
         if (game.has_profile) {
-            auto *monitor = new tsl::elm::ListItem("Sound monitor", "\u203A");
+            list->addItem(new tsl::elm::CategoryHeader("Sounds of this game"));
+            auto *record = new tsl::elm::ToggleListItem("Record sounds", Recording());
+            record->setStateChangedListener([](bool state) { SetRecording(state); });
+            list->addItem(record);
+            auto *recorded = new tsl::elm::ListItem("Recorded sounds", "\u203A");
             std::string id = game.id;
-            monitor->setClickListener([id](u64 keys) {
+            recorded->setClickListener([id](u64 keys) {
                 if (keys & HidNpadButton_A) {
-                    tsl::changeTo<MonitorGui>(id);
+                    tsl::changeTo<RecordedGui>(id, false);
                     return true;
                 }
                 return false;
             });
-            list->addItem(monitor);
+            list->addItem(recorded);
         }
 
         auto *games = new tsl::elm::ListItem("Games", "\u203A");
@@ -677,9 +705,7 @@ public:
     void initServices() override {
         fsdevMountSdmc();   // stdio access to the SD card (harmless if already mounted)
     }
-    void exitServices() override {
-        std::remove(MonitorOn);     // the module stops collecting sounds
-    }
+    void exitServices() override {}     // recording goes on while the overlay is closed
 
     std::unique_ptr<tsl::Gui> loadInitialGui() override {
         return initially<MainGui>();

@@ -21,8 +21,8 @@ void SoundsPoll(bool in_game);
 // sounds.ini: which sounds play which pattern (writes the defaults when the file is missing). Load patterns first.
 void SoundsLoadRules(const char *path, bool forget_names);
 
-// Sound monitor for the overlay: while on, the latest different sounds are kept; Write puts them in a file
-// (one line each: count, name, action)
+// Sound recording for the overlay: while on, every different sound is kept (up to 256, the oldest go first);
+// Write puts them in a file, newest first, one line each: count, last system tick, name, action
 void SoundsSetMonitor(bool on);
 void SoundsMonitorWrite(const char *path);
 

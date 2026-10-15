@@ -31,7 +31,7 @@ void LogVerbose(const char *fmt, ...);
 #define BARS_CHUNK             0x10000
 #define CACHE_SIZE             1024
 #define NAME_SIZE              40
-#define MONITOR_ENTRIES        48
+#define MONITOR_ENTRIES        256
 #define REPEAT_NS              (100 * 1000000ULL)  // layered variants of one sound start together
 
 typedef enum {
@@ -95,7 +95,8 @@ typedef struct {
     char name[NAME_SIZE];   // the sound's name, or wav:<CRC32 of the file's first 256 bytes> when it has none
 } CacheEntry;
 
-// Sound monitor (the overlay shows it): the latest different sounds with how often they played and what they do
+// Sound recording (the overlay shows it): every different sound since recording started, how often and when it
+// last played (system tick, the overlay turns it into "seconds ago") and what it does
 typedef struct {
     char name[NAME_SIZE];
     u32 count;
@@ -155,7 +156,7 @@ void SoundsMonitorWrite(const char *path) {
         const MonitorEntry *m = &g_mon[best];
         const CacheEntry *e = m->entry;
         const char *action = e->kind == Kind_Step ? "step" : e->kind == Kind_Pattern ? HapticsPatternName(e->pattern) : "-";
-        fprintf(f, "%u\t%s\t%s\n", m->count, m->name, action);
+        fprintf(f, "%u\t%lu\t%s\t%s\n", m->count, m->last_tick, m->name, action);
     }
     fclose(f);
 }

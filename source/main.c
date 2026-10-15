@@ -423,7 +423,8 @@ static void LoadPatternsAndRules(bool forget_names) {
     SoundsLoadRules(g_sounds_path[0] ? g_sounds_path : NULL, forget_names);
 }
 
-// The overlay's sound monitor page creates monitor.on while it is open
+// Sound recording: the overlay creates monitor.on to start it and removes it to stop; it keeps running while the
+// overlay is closed
 static void UpdateMonitor(void) {
     static u64 next_check, next_write;
     static bool on;
@@ -439,7 +440,7 @@ static void UpdateMonitor(void) {
         }
     }
     if (on && now >= next_write) {
-        next_write = now + armNsToTicks(500000000ULL);
+        next_write = now + armNsToTicks(1000000000ULL);
         SoundsMonitorWrite(DFX_DIR "/monitor.txt");
     }
 }
