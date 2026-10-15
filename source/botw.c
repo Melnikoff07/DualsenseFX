@@ -69,6 +69,7 @@ void LogVerbose(const char *fmt, ...);
 #define PLAYER_ACTION_FLAGS    0xC40
 #define ACTION_DARUK_BLOCK     0xC000
 #define ACTION_ZL_STANCE       0x18
+#define ACTION_BOW_AIM         0x40000000
 #define ACTION_AIRBORNE        0x2   // probably
 #define STAMINA_OFFSET         0x2C9FD70
 #define STAMINA_CHAIN1         0x38
@@ -410,7 +411,9 @@ static void UpdateActionFlags(BotwState *state) {
 
     // Shield stance dropped straight to nothing: the player got on the shield
     const u32 stance_bits = ACTION_ZL_STANCE | 0x80;
-    if ((state->action_flags & ACTION_ZL_STANCE) && !(flags & stance_bits) && state->equipped[BotwSlot_Shield].present) {
+    // (Going from the shield stance into aiming the bow or a rune also drops the stance: not surfing)
+    if ((state->action_flags & ACTION_ZL_STANCE) && !(flags & stance_bits) && !(flags & ACTION_BOW_AIM) &&
+        state->bow_state == 0 && state->equipped[BotwSlot_Shield].present) {
         SetSurfing(state, true, "stance dropped without lowering the shield");
     } else if (state->surfing) {
         if (flags & ACTION_AIRBORNE) {
