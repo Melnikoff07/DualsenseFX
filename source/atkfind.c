@@ -132,9 +132,10 @@ static bool PointsToObject(u64 addr, u64 value, void *ctx) {
     return R_SUCCEEDED(dmntchtReadCheatProcessMemory(value, &first, 8)) && first == c->vtable;
 }
 
-bool AtkFind(const DmntCheatProcessMetadata *meta, AtkLocation *out) {
+bool AtkFind(const DmntCheatProcessMetadata *meta, AtkLocation *out, u64 *wave_vtable) {
     u64 t0 = armGetSystemTick();
     memset(out, 0, sizeof(*out));
+    *wave_vtable = 0;
     ListRegions(meta);
     u64 base = meta->main_nso_extents.base;
 
@@ -146,6 +147,7 @@ bool AtkFind(const DmntCheatProcessMetadata *meta, AtkLocation *out) {
         return false;
     }
 
+    *wave_vtable = wave_vt;
     PointerCtx pc = {
         meta->heap_extents.base, meta->heap_extents.base + meta->heap_extents.size,
         meta->alias_extents.base, meta->alias_extents.base + meta->alias_extents.size, sap_vt, 0,
@@ -224,4 +226,113 @@ bool AtkFind(const DmntCheatProcessMetadata *meta, AtkLocation *out) {
             armTicksToNs(armGetSystemTick() - t0) / 1000000, out->sound_archive_player, out->sound_pool,
             out->wave_sound_vtable, count, stride);
     return true;
+}
+
+// ---- heap search ----
+
+static struct {
+    u64 vtable;
+    u64 addr, end;              // current region and position
+    u64 heap_lo, heap_hi, alias_lo, alias_hi;
+    u64 run_start, last_hit;    // run of WaveSound vtables at an equal step
+    u32 stride, run_count;
+    bool active;
+    u64 started, scanned;
+} g_hs;
+
+void AtkHeapSearchStart(const DmntCheatProcessMetadata *meta, u64 wave_vtable) {
+    memset(&g_hs, 0, sizeof(g_hs));
+    g_hs.vtable = wave_vtable;
+    g_hs.heap_lo = meta->heap_extents.base;
+    g_hs.heap_hi = meta->heap_extents.base + meta->heap_extents.size;
+    g_hs.alias_lo = meta->alias_extents.base;
+    g_hs.alias_hi = meta->alias_extents.base + meta->alias_extents.size;
+    g_hs.addr = g_hs.end = g_hs.heap_lo;
+    g_hs.active = true;
+    g_hs.started = armGetSystemTick();
+}
+
+// Next readable region at or after addr inside the heap, then the alias region; false at the end
+static bool NextRegion(void) {
+    u64 a = g_hs.end;
+    while (true) {
+        if (a >= g_hs.heap_hi && a < g_hs.alias_lo) {
+            a = g_hs.alias_lo;
+        }
+        if (a >= g_hs.alias_hi && a >= g_hs.heap_hi) {
+            return false;
+        }
+        MemoryInfo mi;
+        if (R_FAILED(dmntchtQueryCheatProcessMemory(&mi, a)) || mi.size == 0) {
+            return false;
+        }
+        u64 next = mi.addr + mi.size;
+        if ((mi.perm & Perm_Rw) == Perm_Rw && mi.type != 0) {
+            g_hs.addr = a > mi.addr ? a : mi.addr;
+            g_hs.end = next;
+            return true;
+        }
+        a = next;
+    }
+}
+
+static bool RunDone(u64 *pool, u32 *slot_size, u32 *count) {
+    if (g_hs.run_count >= 8) {
+        *pool = g_hs.run_start;
+        *slot_size = g_hs.stride;
+        *count = g_hs.run_count;
+        g_hs.active = false;
+        LogLine("atkfind: pool found in the heap after %lu MB, %lu ms: %X, %u slots of %X", g_hs.scanned >> 20,
+                armTicksToNs(armGetSystemTick() - g_hs.started) / 1000000, g_hs.run_start, g_hs.run_count, g_hs.stride);
+        return true;
+    }
+    return false;
+}
+
+int AtkHeapSearchStep(u64 budget, u64 *pool, u32 *slot_size, u32 *count) {
+    if (!g_hs.active) {
+        return -1;
+    }
+    while (budget > 0) {
+        if (g_hs.addr >= g_hs.end && !NextRegion()) {
+            if (RunDone(pool, slot_size, count)) {
+                return 1;
+            }
+            g_hs.active = false;
+            LogLine("atkfind: no WaveSound pool in %lu MB of heap", g_hs.scanned >> 20);
+            return -1;
+        }
+        u64 n = g_hs.end - g_hs.addr < CHUNK ? g_hs.end - g_hs.addr : CHUNK;
+        if (R_SUCCEEDED(dmntchtReadCheatProcessMemory(g_hs.addr, g_buf, n))) {
+            for (u64 i = 0; i + 8 <= n; i += 8) {
+                u64 v;
+                memcpy(&v, g_buf + i, 8);
+                if (v != g_hs.vtable) {
+                    continue;
+                }
+                u64 at = g_hs.addr + i;
+                u64 d = at - g_hs.last_hit;
+                if (g_hs.last_hit && g_hs.run_count >= 1 && (g_hs.stride == 0 ? d < 0x2000 : d == g_hs.stride)) {
+                    g_hs.stride = (u32)d;
+                    ++g_hs.run_count;
+                } else {
+                    if (RunDone(pool, slot_size, count)) {
+                        return 1;
+                    }
+                    g_hs.run_start = at;
+                    g_hs.run_count = 1;
+                    g_hs.stride = 0;
+                }
+                g_hs.last_hit = at;
+            }
+            // A finished run (no hit for more than one step past the last one)
+            if (g_hs.run_count >= 8 && g_hs.addr + n > g_hs.last_hit + g_hs.stride && RunDone(pool, slot_size, count)) {
+                return 1;
+            }
+        }
+        g_hs.addr += n;
+        g_hs.scanned += n;
+        budget = budget > n ? budget - n : 0;
+    }
+    return 0;
 }

@@ -164,6 +164,8 @@ void SoundsMonitorWrite(const char *path) {
 static u64 g_sap_offset, g_pool_field, g_vtable_offset;  // from the game profile or found (atkfind.c)
 static u32 g_slot_size = 0x3A0, g_count = 64;
 static bool g_auto, g_auto_tried, g_auto_failed, g_found_new;
+static bool g_heap_search;          // looking for the pool in the heap (its address changes every start)
+static u64 g_heap_pool;
 static AtkLocation g_found;
 static u64 g_main_base;
 static u64 g_pool;
@@ -183,7 +185,7 @@ SoundsStatus SoundsGetStatus(void) {
     if (g_sap_offset == 0 && !g_auto) {
         return SoundsStatus_Off;
     }
-    return g_pool ? SoundsStatus_Active : SoundsStatus_Searching;
+    return g_pool ? SoundsStatus_Active : SoundsStatus_Searching;   // includes the heap search
 }
 
 bool SoundsTakeFound(AtkLocation *out) {
@@ -212,6 +214,8 @@ void SoundsConfigure(u64 sound_archive_player, u64 sound_pool, u64 wave_sound_vt
     g_auto = find && sound_archive_player == 0;
     g_auto_tried = false;
     g_auto_failed = false;
+    g_heap_search = false;
+    g_heap_pool = 0;
     g_pool = 0;
     g_check_tick = 0;
     SoundsReset();
@@ -221,7 +225,8 @@ void SoundsUpdate(const DmntCheatProcessMetadata *meta) {
     if (g_sap_offset == 0 && g_auto && !g_auto_tried) {
         g_auto_tried = true;    // once per game start: a few seconds of reading
         AtkLocation loc;
-        if (AtkFind(meta, &loc) && (u64)loc.slot_size * loc.count <= POOL_BUF_SIZE && loc.count <= MAX_SLOTS) {
+        u64 wave_vt = 0;
+        if (AtkFind(meta, &loc, &wave_vt) && (u64)loc.slot_size * loc.count <= POOL_BUF_SIZE && loc.count <= MAX_SLOTS) {
             g_sap_offset = loc.sound_archive_player;
             g_pool_field = loc.sound_pool;
             g_vtable_offset = loc.wave_sound_vtable;
@@ -229,9 +234,56 @@ void SoundsUpdate(const DmntCheatProcessMetadata *meta) {
             g_count = loc.count;
             g_found = loc;
             g_found_new = true;
+        } else if (wave_vt != 0) {
+            // nn::atk, but no global leads to the player: look for the pool itself in the heap
+            g_vtable_offset = wave_vt - meta->main_nso_extents.base;
+            AtkHeapSearchStart(meta, wave_vt);
+            g_heap_search = true;
         } else {
             g_auto_failed = true;
         }
+    }
+    if (g_heap_search) {
+        u64 pool;
+        u32 size, count;
+        int r = AtkHeapSearchStep(32 << 20, &pool, &size, &count);     // 32 MB per update
+        if (r == 0) {
+            return;
+        }
+        g_heap_search = false;
+        if (r < 0 || (u64)size * count > POOL_BUF_SIZE || count > MAX_SLOTS) {
+            g_auto_failed = true;
+            return;
+        }
+        g_heap_pool = pool;
+        g_slot_size = size;
+        g_count = count;
+        g_pool = 0;
+        g_check_tick = 0;
+    }
+    if (g_heap_pool) {
+        // Found in the heap: check the first and last slot from time to time, search again if they changed
+        u64 now = armGetSystemTick();
+        if (now < g_check_tick) {
+            return;
+        }
+        g_check_tick = now + armNsToTicks(5000 * 1000000ULL);
+        u64 base = meta->main_nso_extents.base, first = 0, last = 0;
+        bool ok = R_SUCCEEDED(dmntchtReadCheatProcessMemory(g_heap_pool, &first, 8)) &&
+                  R_SUCCEEDED(dmntchtReadCheatProcessMemory(g_heap_pool + (u64)(g_count - 1) * g_slot_size, &last, 8)) &&
+                  first == base + g_vtable_offset && last == base + g_vtable_offset;
+        if (ok && g_pool != g_heap_pool) {
+            LogLine("sounds: pool at %010lX (heap search), sound haptics on", g_heap_pool);
+            SoundsReset();
+        }
+        g_pool = ok ? g_heap_pool : 0;
+        if (!ok) {
+            LogLine("sounds: pool at %010lX gone, searching again", g_heap_pool);
+            g_heap_pool = 0;
+            AtkHeapSearchStart(meta, base + g_vtable_offset);
+            g_heap_search = true;
+        }
+        return;
     }
     if (g_sap_offset == 0 || g_count == 0) {
         g_pool = 0;

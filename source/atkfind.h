@@ -14,4 +14,12 @@ typedef struct {
     u32 count;
 } AtkLocation;
 
-bool AtkFind(const DmntCheatProcessMetadata *meta, AtkLocation *out);
+// Fast path: the pool behind a global SoundArchivePlayer pointer (BotW). On failure *wave_vtable is still set when
+// the game uses nn::atk, for the heap search below.
+bool AtkFind(const DmntCheatProcessMetadata *meta, AtkLocation *out, u64 *wave_vtable);
+
+// Heap search for games whose SoundArchivePlayer sits deep inside other objects (Mario Odyssey): looks for a run of
+// WaveSound objects at an equal step. Runs in steps so the module stays responsive; the address changes every start.
+void AtkHeapSearchStart(const DmntCheatProcessMetadata *meta, u64 wave_vtable);
+// 0 searching, 1 found (pool, slot size, count), -1 not found
+int AtkHeapSearchStep(u64 budget_bytes, u64 *pool, u32 *slot_size, u32 *count);
