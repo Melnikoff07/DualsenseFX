@@ -43,7 +43,7 @@ typedef enum {
 } HapticPattern;
 
 // Pattern ids: the HapticPattern values, then the patterns patterns.ini adds
-#define HAPTIC_PATTERN_IDS (HapticPattern_Count + 32)
+#define HAPTIC_PATTERN_IDS (HapticPattern_Count + 64)
 
 typedef enum {
     HapticLoop_BowTension,
@@ -102,6 +102,7 @@ void HapticsStopAll(void);
 
 const char *HapticsPatternName(u32 pattern);
 
-// patterns.ini: defaults first, then what the file changes or adds; writes the defaults when the file is missing
-void HapticsLoadPatterns(const char *path);
+// Built-in patterns, then the library (config/dualsensefx/patterns.ini), then the game's patterns.ini; missing files
+// are written with their defaults (builtin_profile: the game is BotW, whose patterns are built in)
+void HapticsLoadPatterns(const char *library, const char *profile, bool builtin_profile);
 int HapticsFindPattern(const char *name);       // -1 if there is no such pattern

@@ -354,6 +354,26 @@ static Pattern *SectionFor(const char *name, bool *loop) {
     return p;
 }
 
+static const char *LibraryDefaults =
+    "; DualsenseFX pattern library: ready-made patterns every game profile can use (sounds.ini: name = <pattern> [%]).\n"
+    "; A game's own patterns.ini can change any of them for that game. Applied within a second after saving.\n"
+    ";   voice = sine|noise  left right  freq_start freq_end  delay attack hold decay   (amplitude 0-255, Hz, ms)\n"
+    "\n[tap light]\ngroup = world\nvoice = sine   60  60  140  120    0    1    5   35\n"
+    "\n[tap]\ngroup = world\nvoice = sine  110 110  160  110    0    1    8   60\n"
+    "\n[click]\ngroup = world\nvoice = sine  120 120  260  300    0    1    4   25\nvoice = noise  60  60  800  800    0    1    2   15\n"
+    "\n[tick]\ngroup = world\nvoice = sine  150 150  180  180    0    1    8   25\n"
+    "\n[pop]\ngroup = world\nvoice = sine   90  90  160  100    0    1   10   60\n"
+    "\n[thud]\ngroup = world\nvoice = sine  200 200   70   45    0    2   30  150\nvoice = noise 120 120  140  140    0    1   15   90\n"
+    "\n[heavy thud]\ngroup = world\nvoice = sine  255 255   55   30    0    3   60  260\nvoice = noise 200 200  110  110    0    2   40  200\n"
+    "\n[explosion]\ngroup = world\nvoice = sine  255 255   60   25    0    2  120  600\nvoice = noise 255 255  300   80    0    1   60  450\nvoice = noise 150 150  120  120  120   30  100  600\n"
+    "\n[crack]\ngroup = world\nvoice = noise 220 220  700  300    0    1   20  120\nvoice = sine  160 160  200   90    0    1   10  100\n"
+    "\n[splash]\ngroup = world\nvoice = noise 160 160  200   80    0    2   60  300\nvoice = sine  110 110   55   40    0    3   30  200\n"
+    "\n[swell]\ngroup = world\nvoice = sine   90  90   90  160    0  150  100  300\n"
+    "\n[buzz]\ngroup = world\nvoice = sine  120 120  220  220    0    5  150   60\nvoice = noise  60  60  300  300    0    5  150   60\n"
+    "\n[rumble]\ngroup = world\nvoice = noise 150 150   90   70    0   40  300  400\nvoice = sine  120 120   45   45    0   40  300  400\n"
+    "\n[sparkle]\ngroup = world\nvoice = sine   70  70  300  500    0   10   30  120\n"
+    "\n[whoosh]\ngroup = world\nvoice = noise  70  70  150  110    0   40   60  200\n";
+
 static void WriteVoices(FILE *f, const Pattern *p) {
     for (u32 v = 0; v < p->count; ++v) {
         const VoiceDef *d = &p->voices[v];
@@ -392,15 +412,20 @@ static void WriteDefaults(const char *path) {
     LogLine("haptics: wrote default %s", path);
 }
 
-void HapticsLoadPatterns(const char *path) {
-    ResetPatterns();
-    if (path == NULL) {
-        return;     // no game: the built-in defaults
+static void WriteText(const char *path, const char *text) {
+    FILE *f = fopen(path, "w");
+    if (f) {
+        fputs(text, f);
+        fclose(f);
+        LogLine("haptics: wrote default %s", path);
     }
+}
+
+// One patterns file on top of what is loaded already; false if it is missing
+static bool ParsePatternFile(const char *path) {
     FILE *f = fopen(path, "r");
     if (f == NULL) {
-        WriteDefaults(path);
-        return;
+        return false;
     }
     char line[256];
     Pattern *cur = NULL;
@@ -457,6 +482,24 @@ void HapticsLoadPatterns(const char *path) {
     }
     fclose(f);
     LogLine("haptics: %s: %u sections, %u patterns, %u lines not understood", path, sections, g_num_patterns, bad);
+    return true;
+}
+
+void HapticsLoadPatterns(const char *library, const char *profile, bool builtin_profile) {
+    ResetPatterns();
+    if (library && !ParsePatternFile(library)) {
+        WriteText(library, LibraryDefaults);
+        ParsePatternFile(library);
+    }
+    if (profile && !ParsePatternFile(profile)) {
+        // BotW's patterns are built in and written out in full; other games start with an empty file
+        if (builtin_profile) {
+            WriteDefaults(profile);
+        } else {
+            WriteText(profile, "; Patterns of this game: change library patterns for it or add new ones, same format as\n"
+                               "; config/dualsensefx/patterns.ini. strength = 0-200 scales one pattern.\n");
+        }
+    }
 }
 
 int HapticsFindPattern(const char *name) {

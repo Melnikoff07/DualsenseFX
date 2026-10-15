@@ -416,14 +416,17 @@ static bool FileChanged(WatchedFile *w) {
 
 // Rules refer to patterns by name, so they are read after them. A strength change in patterns.ini keeps the looked-up
 // sound names (pattern ids stay the same); a change in sounds.ini looks them up again.
+static bool g_profile_builtin;  // the current game is BotW (built-in patterns)
+
 static void LoadPatternsAndRules(bool forget_names) {
-    HapticsLoadPatterns(g_patterns_path[0] ? g_patterns_path : NULL);
+    HapticsLoadPatterns(DFX_DIR "/patterns.ini", g_patterns_path[0] ? g_patterns_path : NULL, g_profile_builtin);
     SoundsLoadRules(g_sounds_path[0] ? g_sounds_path : NULL, forget_names);
 }
 
 static void CheckConfigChanged(void) {
     static u64 next_tick;
     static WatchedFile config = { CONFIG_PATH, 0, false }, patterns = { g_patterns_path, 0, false }, sounds = { g_sounds_path, 0, false };
+    static WatchedFile library = { DFX_DIR "/patterns.ini", 0, false };
     u64 now = armGetSystemTick();
     if (now < next_tick) {
         return;
@@ -433,11 +436,15 @@ static void CheckConfigChanged(void) {
         LogLine("config.ini changed, reloading");
         ReloadConfig();
     }
+    bool lib = FileChanged(&library);
     if (g_patterns_path[0] == 0) {
         patterns.have = sounds.have = false;    // no game: start fresh with the next one
+        if (lib) {
+            LoadPatternsAndRules(false);
+        }
         return;
     }
-    bool p = FileChanged(&patterns), r = FileChanged(&sounds);
+    bool p = FileChanged(&patterns) || lib, r = FileChanged(&sounds);
     if (p || r) {
         LogLine("%s changed, reloading", p ? "patterns.ini" : "sounds.ini");
         LoadPatternsAndRules(r);
@@ -567,7 +574,8 @@ static void TryAttach(GameSession *s) {
     if (s->profile.program_id == BOTW_PROGRAM_ID) {
         BotwInit(&s->botw, &s->meta);
     }
-    SoundsConfigure(s->profile.sound_archive_player, s->profile.sound_pool, s->profile.wave_sound_vtable);
+    SoundsConfigure(s->profile.sound_archive_player, s->profile.sound_pool, s->profile.wave_sound_vtable,
+                    s->profile.sound_slot_size, s->profile.sound_slots, s->profile.sound_find);
     ProfileSetCurrent(&s->profile);
     DumpStart(&s->meta);
 
@@ -610,7 +618,7 @@ static void Update(GameSession *s) {
         CloseSession(s);
         memset(s, 0, sizeof(*s));
         ProfileSetCurrent(NULL);
-        SoundsConfigure(0, 0, 0);
+        SoundsConfigure(0, 0, 0, 0, 0, false);
         g_patterns_path[0] = g_sounds_path[0] = 0;
         LoadPatternsAndRules(true);
     }
@@ -626,6 +634,7 @@ static void Update(GameSession *s) {
         }
         LogLine("%s started, pid %lu", s->profile.name, pid);
         ProfilePath(&s->profile, "patterns.ini", g_patterns_path, sizeof(g_patterns_path));
+        g_profile_builtin = s->profile.program_id == BOTW_PROGRAM_ID;
         ProfilePath(&s->profile, "sounds.ini", g_sounds_path, sizeof(g_sounds_path));
         LoadPatternsAndRules(true);
         s->state = SessionState_Attaching;
@@ -642,6 +651,11 @@ static void Update(GameSession *s) {
         DumpUpdate();
         BotwUpdate(&s->botw, &s->meta);
         SoundsUpdate(&s->meta);
+        AtkLocation found;
+        if (SoundsTakeFound(&found)) {
+            ProfileSaveSoundPool(&s->profile, found.sound_archive_player, found.sound_pool, found.wave_sound_vtable,
+                                 found.slot_size, found.count);
+        }
 
         // Send effects only when they change, the controller keeps the last ones
         TriggerEffects effects;

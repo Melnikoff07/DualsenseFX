@@ -16,12 +16,13 @@
 #include <string.h>
 #include "sounds.h"
 #include "haptics.h"
+#include "atkfind.h"
 
 void LogLine(const char *fmt, ...);
 void LogVerbose(const char *fmt, ...);
 
-#define WAVE_SOUND_SIZE        0x3A0
-#define WAVE_SOUND_COUNT       64
+#define MAX_SLOTS              256
+#define POOL_BUF_SIZE          0x20000
 #define WAVE_FREE              0x100
 #define WAVE_SERIAL            0x104
 #define WAVE_DATA              0x200
@@ -91,34 +92,66 @@ typedef struct {
     s16 pattern;
 } CacheEntry;
 
-static u64 g_sap_offset, g_pool_field, g_vtable_offset;  // from the game profile, 0 = no sound haptics
+static u64 g_sap_offset, g_pool_field, g_vtable_offset;  // from the game profile or found (atkfind.c)
+static u32 g_slot_size = 0x3A0, g_count = 64;
+static bool g_auto, g_auto_tried, g_found_new;
+static AtkLocation g_found;
 static u64 g_main_base;
 static u64 g_pool;
 static u64 g_check_tick;
 static bool g_serials_valid;
-static u32 g_serials[WAVE_SOUND_COUNT];
+static u32 g_serials[MAX_SLOTS];
 static CacheEntry g_cache[CACHE_SIZE];
 static u64 g_last_play_tick[HAPTIC_PATTERN_IDS];
-static u8 g_pool_buf[WAVE_SOUND_COUNT * WAVE_SOUND_SIZE];
+static u8 g_pool_buf[POOL_BUF_SIZE];
 static u8 g_chunk[BARS_CHUNK + 4];
 static u32 g_resolved, g_unnamed;
+
+bool SoundsTakeFound(AtkLocation *out) {
+    if (!g_found_new) {
+        return false;
+    }
+    *out = g_found;
+    g_found_new = false;
+    return true;
+}
 
 void SoundsReset(void) {
     memset(g_cache, 0, sizeof(g_cache));
     g_serials_valid = false;
 }
 
-void SoundsConfigure(u64 sound_archive_player, u64 sound_pool, u64 wave_sound_vtable) {
+void SoundsConfigure(u64 sound_archive_player, u64 sound_pool, u64 wave_sound_vtable, u32 slot_size, u32 count, bool find) {
     g_sap_offset = sound_archive_player;
     g_pool_field = sound_pool;
     g_vtable_offset = wave_sound_vtable;
+    g_slot_size = slot_size ? slot_size : 0x3A0;
+    g_count = count ? count : 64;
+    if ((u64)g_slot_size * g_count > POOL_BUF_SIZE || g_count > MAX_SLOTS) {
+        g_count = 0;
+    }
+    g_auto = find && sound_archive_player == 0;
+    g_auto_tried = false;
     g_pool = 0;
     g_check_tick = 0;
     SoundsReset();
 }
 
 void SoundsUpdate(const DmntCheatProcessMetadata *meta) {
-    if (g_sap_offset == 0) {
+    if (g_sap_offset == 0 && g_auto && !g_auto_tried) {
+        g_auto_tried = true;    // once per game start: a few seconds of reading
+        AtkLocation loc;
+        if (AtkFind(meta, &loc) && (u64)loc.slot_size * loc.count <= POOL_BUF_SIZE && loc.count <= MAX_SLOTS) {
+            g_sap_offset = loc.sound_archive_player;
+            g_pool_field = loc.sound_pool;
+            g_vtable_offset = loc.wave_sound_vtable;
+            g_slot_size = loc.slot_size;
+            g_count = loc.count;
+            g_found = loc;
+            g_found_new = true;
+        }
+    }
+    if (g_sap_offset == 0 || g_count == 0) {
         g_pool = 0;
         return;
     }
@@ -131,7 +164,7 @@ void SoundsUpdate(const DmntCheatProcessMetadata *meta) {
     bool ok = R_SUCCEEDED(dmntchtReadCheatProcessMemory(base + g_sap_offset, &sap, sizeof(sap))) && sap != 0 &&
               R_SUCCEEDED(dmntchtReadCheatProcessMemory(sap + g_pool_field, &pool, sizeof(pool))) && pool != 0 &&
               R_SUCCEEDED(dmntchtReadCheatProcessMemory(pool, &first, sizeof(first))) &&
-              R_SUCCEEDED(dmntchtReadCheatProcessMemory(pool + (WAVE_SOUND_COUNT - 1) * WAVE_SOUND_SIZE, &last, sizeof(last))) &&
+              R_SUCCEEDED(dmntchtReadCheatProcessMemory(pool + (g_count - 1) * g_slot_size, &last, sizeof(last))) &&
               first == base + g_vtable_offset && last == base + g_vtable_offset;
     if (!ok) {
         pool = 0;
@@ -443,8 +476,8 @@ void SoundsPoll(bool in_game) {
         return;
     }
     bool looked_up = false;     // at most one (slow) name lookup per poll
-    for (u32 i = 0; i < WAVE_SOUND_COUNT; ++i) {
-        const u8 *slot = g_pool_buf + i * WAVE_SOUND_SIZE;
+    for (u32 i = 0; i < g_count; ++i) {
+        const u8 *slot = g_pool_buf + i * g_slot_size;
         u32 free_mark, serial;
         u64 fwav;
         memcpy(&free_mark, slot + WAVE_FREE, sizeof(free_mark));

@@ -95,6 +95,7 @@ bool ProfileLoad(u64 program_id, GameProfile *out) {
         return false;
     }
     out->enabled = true;
+    out->sound_find = true;
     snprintf(out->name, sizeof(out->name), "%016lX", program_id);
     char line[256];
     while (fgets(line, sizeof(line), f)) {
@@ -138,6 +139,12 @@ bool ProfileLoad(u64 program_id, GameProfile *out) {
             out->sound_pool = v;
         } else if (strcmp(key, "wave_sound_vtable") == 0 && ParseHex(value, &v)) {
             out->wave_sound_vtable = v;
+        } else if (strcmp(key, "sound_slot_size") == 0 && ParseHex(value, &v)) {
+            out->sound_slot_size = (u32)v;
+        } else if (strcmp(key, "sound_slots") == 0) {
+            out->sound_slots = (u32)atoi(value);
+        } else if (strcmp(key, "sound") == 0) {
+            out->sound_find = strcmp(value, "off") != 0;
         }
     }
     fclose(f);
@@ -154,6 +161,25 @@ bool ProfileBuildMatches(const GameProfile *p, const u8 *build_id) {
         }
     }
     return false;
+}
+
+void ProfileSaveSoundPool(GameProfile *p, u64 sap, u64 pool, u64 vtable, u32 slot_size, u32 slots) {
+    char path[128];
+    ProfilePath(p, "game.ini", path, sizeof(path));
+    FILE *f = fopen(path, "a");
+    if (f == NULL) {
+        return;
+    }
+    fprintf(f, "\n; nn::atk sound pool, found automatically (delete these lines to look again)\n"
+               "sound_archive_player = %lX\nsound_pool = %lX\nwave_sound_vtable = %lX\nsound_slot_size = %X\nsound_slots = %u\n",
+            sap, pool, vtable, slot_size, slots);
+    fclose(f);
+    p->sound_archive_player = sap;
+    p->sound_pool = pool;
+    p->wave_sound_vtable = vtable;
+    p->sound_slot_size = slot_size;
+    p->sound_slots = slots;
+    LogLine("profile: sound pool saved to %s", path);
 }
 
 void ProfileSetCurrent(const GameProfile *p) {

@@ -19,6 +19,8 @@ typedef struct {
     u64 sound_archive_player;               // main+ offset of the nn::atk SoundArchivePlayer pointer, 0 = none
     u64 sound_pool;                         // offset of the WaveSound pool pointer in it
     u64 wave_sound_vtable;                  // main+ offset of the WaveSound vtable (checked before use)
+    u32 sound_slot_size, sound_slots;       // pool layout, 0 = BotW's (0x3A0, 64)
+    bool sound_find;                        // sound = auto (default): look for the pool when the offsets are missing
     char dir[96];
 } GameProfile;
 
@@ -31,6 +33,9 @@ bool ProfileBuildMatches(const GameProfile *p, const u8 *build_id);
 
 // current_game.txt tells the overlay which profile is in use (NULL: none)
 void ProfileSetCurrent(const GameProfile *p);
+
+// Appends the found sound pool to game.ini, so the next start doesn't need to look for it
+void ProfileSaveSoundPool(GameProfile *p, u64 sap, u64 pool, u64 vtable, u32 slot_size, u32 slots);
 
 // Path of a file in the profile's folder
 void ProfilePath(const GameProfile *p, const char *file, char *out, size_t size);
