@@ -1,4 +1,4 @@
-// DualSense FX: Tesla / Ultrahand overlay for the adaptive_triggers settings.
+// DualsenseFX: Tesla / Ultrahand overlay for the adaptive_triggers settings.
 // It only edits sdmc:/config/adaptive_triggers/config.ini; the sysmodule notices the change and applies it within
 // a second, no reboot needed.
 #define TESLA_INIT_IMPL
@@ -135,7 +135,7 @@ class MainGui : public tsl::Gui {
 public:
     tsl::elm::Element *createUI() override {
         g_config.load();
-        auto *frame = new tsl::elm::OverlayFrame("DualSense FX", "BotW 1.6.0 • applied instantly");
+        auto *frame = new tsl::elm::OverlayFrame("DualsenseFX", "Zelda: Breath of the Wild 1.6.0");
         auto *list = new tsl::elm::List();
 
         list->addItem(new tsl::elm::CategoryHeader("Effects"));

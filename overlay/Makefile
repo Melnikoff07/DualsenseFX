@@ -38,7 +38,7 @@ include $(DEVKITPRO)/libnx/switch_rules
 #   NACP building is skipped as well.
 #---------------------------------------------------------------------------------
 
-APP_TITLE			:=		DualSense FX
+APP_TITLE			:=		DualsenseFX
 APP_VERSION 	:= 		0.3.0
 
 TARGET		:=	dualsense_fx
