@@ -1,6 +1,7 @@
 // Haptic patterns for game events, played on the DualSense voice coils through MissionControl
 #pragma once
 #include <switch.h>
+#include "mc.h"
 
 typedef enum {
     HapticPattern_HitSword,     // one-handed weapon hit something
@@ -62,7 +63,15 @@ typedef enum {
     HapticGroup_Count,
 } HapticGroup;
 
+// Where the haptics go (config.ini output=)
+typedef enum {
+    HapticOutput_Off = 0,
+    HapticOutput_DualSense = 1,     // MissionControl, with adaptive triggers and lightbar
+    HapticOutput_JoyCon = 2,        // Joy-Con / Pro Controller HD rumble (joycon.c)
+} HapticOutput;
+
 typedef struct {
+    u32 output;         // HapticOutput
     bool enabled;       // haptics=1 in config.ini
     u32 strength;       // percent, scales every pattern
     u32 group[HapticGroup_Count];
@@ -70,8 +79,15 @@ typedef struct {
 
 extern HapticSettings g_haptic_settings;
 
-// Set by main while the mc session is open
+// Set by main: a game session is attached, and whether the mc session (DualSense) is open
 void HapticsSetAvailable(bool available);
+void HapticsSetMcOpen(bool open);
+
+// After the settings changed: stops what plays on the old output and starts the new one
+void HapticsApplyOutput(void);
+
+// Raw voices (network control), sent to the current output
+void HapticsSendVoices(const McHapticVoice *voices, u32 count);
 
 // amount: 0.0-1.0 for patterns that scale (damage, landing), ignored by the others
 void HapticsPlay(u32 pattern, float amount);

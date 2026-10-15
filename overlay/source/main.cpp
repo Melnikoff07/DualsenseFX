@@ -138,8 +138,14 @@ public:
         auto *frame = new tsl::elm::OverlayFrame("DualsenseFX", "Zelda: Breath of the Wild 1.6.0");
         auto *list = new tsl::elm::List();
 
+        list->addItem(new tsl::elm::CategoryHeader("Output"));
+        auto *output = new tsl::elm::NamedStepTrackBar("\u2194", { "Off", "DualSense", "Joy-Con" });
+        output->setProgress(std::min(g_config.get("output", 1), 2));
+        output->setValueChangedListener([](u8 index) { g_config.set("output", index); });
+        list->addItem(output);
+
         list->addItem(new tsl::elm::CategoryHeader("Effects"));
-        AddToggle(list, "Adaptive triggers", "triggers", 1);
+        AddToggle(list, "Adaptive triggers (DualSense)", "triggers", 1);
         AddToggle(list, "Haptics", "haptics", 1);
         AddToggle(list, "Low health heartbeat", "low_health_quarters", 4, 4);
 

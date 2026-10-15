@@ -402,12 +402,12 @@ static void CmdHaptic(const NetContext *ctx, char **w, int n) {
         }
         v[count++] = (McHapticVoice){ (u8)f[0], (u8)f[1], (u8)f[2], (u8)f[3], (u16)f[4], (u16)f[5], (u16)f[6], (u16)f[7], (u16)f[8], (u16)f[9] };
     }
-    if (!ctx->mc_open || count == 0) {
+    if (!ctx->attached || count == 0) {
         Reply("ERR need voices and a running BotW session");
         return;
     }
-    Result rc = mcPlayHaptics(v, count);
-    Reply(R_SUCCEEDED(rc) ? "OK %d voices" : "ERR 0x%X", R_SUCCEEDED(rc) ? count : (int)rc);
+    HapticsSendVoices(v, count);
+    Reply("OK %d voices", count);
 }
 
 static void CmdPattern(const NetContext *ctx, char **w, int n) {
@@ -565,6 +565,63 @@ static void CmdPut(char **w, int n) {
     Reply("OK %lu crc %08X", size, crc);
 }
 
+// Experiment: can this background module make the Joy-Cons vibrate through the hid service while a game runs?
+// jtest h|d [ms] [amp 0-100] [freq_high]: h = attached (handheld), d = detached pair (player 1)
+static bool g_hid_ready;
+
+static void CmdJoyConTest(char **w, int n) {
+    if (n < 2 || (w[1][0] != 'h' && w[1][0] != 'd')) {
+        Reply("ERR usage: jtest h|d [ms] [amp 0-100] [freq_high]");
+        return;
+    }
+    u32 ms = n > 2 ? strtoul(w[2], NULL, 10) : 1000;
+    float amp = (n > 3 ? strtoul(w[3], NULL, 10) : 60) / 100.0f;
+    float fh = n > 4 ? strtof(w[4], NULL) : 320.0f;
+    if (ms > 3000) {
+        ms = 3000;
+    }
+    if (!g_hid_ready) {
+        Result rc = hidInitialize();
+        LogLine("net: jtest hidInitialize 0x%X", rc);
+        if (R_FAILED(rc)) {
+            Reply("ERR hidInitialize 0x%X", rc);
+            return;
+        }
+        g_hid_ready = true;
+    }
+    HidVibrationDeviceHandle h[2];
+    Result rc = w[1][0] == 'h' ? hidInitializeVibrationDevices(h, 2, HidNpadIdType_Handheld, HidNpadStyleTag_NpadHandheld)
+                               : hidInitializeVibrationDevices(h, 2, HidNpadIdType_No1, HidNpadStyleTag_NpadJoyDual);
+    bool permitted = false;
+    Result rp = hidIsVibrationPermitted(&permitted);
+    if (R_FAILED(rc)) {
+        Reply("ERR InitializeVibrationDevices 0x%X (permitted %u, rc 0x%X)", rc, permitted, rp);
+        return;
+    }
+    HidVibrationValue v[2] = {
+        { .amp_low = amp, .freq_low = 160.0f, .amp_high = amp, .freq_high = fh },
+        { .amp_low = amp, .freq_low = 160.0f, .amp_high = amp, .freq_high = fh },
+    };
+    Result rs = 0;
+    HidVibrationValue actual = {0};
+    for (u32 t = 0; t < ms; t += 10) {
+        rs = hidSendVibrationValues(h, v, 2);
+        if (t == 200) {
+            hidGetActualVibrationValue(h[0], &actual);
+        }
+        svcSleepThread(10000000ULL);
+    }
+    HidVibrationValue off[2] = {
+        { .amp_low = 0, .freq_low = 160.0f, .amp_high = 0, .freq_high = 320.0f },
+        { .amp_low = 0, .freq_low = 160.0f, .amp_high = 0, .freq_high = 320.0f },
+    };
+    hidSendVibrationValues(h, off, 2);
+    LogLine("net: jtest %c send 0x%X permitted %u actual %.2f/%.0f %.2f/%.0f", w[1][0], rs, permitted,
+            actual.amp_low, actual.freq_low, actual.amp_high, actual.freq_high);
+    Reply("OK send 0x%X, permitted %u, actual while sending: low %.2f @ %.0f Hz, high %.2f @ %.0f Hz", rs, permitted,
+          actual.amp_low, actual.freq_low, actual.amp_high, actual.freq_high);
+}
+
 static void CmdRm(char **w, int n) {
     if (n < 2 || !PathAllowed(w[1])) {
         Reply("ERR path not allowed");
@@ -619,6 +676,7 @@ static void HandleLine(const NetContext *ctx, char *line) {
     else if (!strcmp(w[0], "get"))      CmdGet(w, n);
     else if (!strcmp(w[0], "put"))      CmdPut(w, n);
     else if (!strcmp(w[0], "rm"))       CmdRm(w, n);
+    else if (!strcmp(w[0], "jtest"))    CmdJoyConTest(w, n);
     else if (!strcmp(w[0], "reload"))   { ReloadConfig(); LogLine("net: config reloaded"); Reply("OK"); }
     else if (!strcmp(w[0], "reboot") && n == 2 && !strcmp(w[1], "confirm")) {
         LogLine("net: reboot requested");

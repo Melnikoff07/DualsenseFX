@@ -7,11 +7,12 @@
 #include <string.h>
 #include "haptics.h"
 #include "mc.h"
+#include "joycon.h"
 
 void LogLine(const char *fmt, ...);
 void LogVerbose(const char *fmt, ...);
 
-HapticSettings g_haptic_settings = { .enabled = true, .strength = 100, .group = { 100, 100, 100, 100, 50 } };
+HapticSettings g_haptic_settings = { .output = HapticOutput_DualSense, .enabled = true, .strength = 100, .group = { 100, 100, 100, 100, 50 } };
 
 #define NOISE McHapticFlag_Noise
 #define LOOP  McHapticFlag_Loop
@@ -211,8 +212,49 @@ static const StepDef DefaultSteps[] = {
 #define SLOT_COUNT         12   // MissionControl HapticVoiceSlots
 
 static bool g_available;
-static u32 g_next_slot = FIRST_ONESHOT_SLOT;
 static bool g_loop_on[HapticLoop_Count];
+static bool g_mc_open;
+static u32 g_output_applied = HapticOutput_DualSense;
+
+static Result Send(const McHapticVoice *voices, u32 count) {
+    switch (g_haptic_settings.output) {
+    case HapticOutput_DualSense:
+        return g_mc_open ? mcPlayHaptics(voices, count) : MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
+    case HapticOutput_JoyCon:
+        JoyConPlay(voices, count);
+        return 0;
+    default:
+        return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
+    }
+}
+
+void HapticsSetMcOpen(bool open) {
+    g_mc_open = open;
+}
+
+void HapticsSendVoices(const McHapticVoice *voices, u32 count) {
+    Send(voices, count);
+}
+
+void HapticsApplyOutput(void) {
+    u32 out = g_haptic_settings.output;
+    if (out == HapticOutput_JoyCon) {
+        JoyConStart();
+    }
+    if (out == g_output_applied) {
+        return;
+    }
+    // Silence the old output, loops start again on the new one
+    if (g_output_applied == HapticOutput_DualSense && g_mc_open) {
+        mcStopHaptics();
+    } else if (g_output_applied == HapticOutput_JoyCon) {
+        JoyConStopAll();
+    }
+    memset(g_loop_on, 0, sizeof(g_loop_on));
+    LogLine("haptics: output %s", out == HapticOutput_DualSense ? "DualSense" : out == HapticOutput_JoyCon ? "Joy-Con" : "off");
+    g_output_applied = out;
+}
+static u32 g_next_slot = FIRST_ONESHOT_SLOT;
 
 // ---- patterns.ini: the tables above are the defaults, the file can change any of them and add new ones ----
 
@@ -472,7 +514,7 @@ void HapticsPlay(u32 pattern, float amount) {
         voices[i] = MakeVoice(&p->voices[i], g_next_slot, factor);
         g_next_slot = g_next_slot + 1 >= SLOT_COUNT ? FIRST_ONESHOT_SLOT : g_next_slot + 1;
     }
-    Result rc = mcPlayHaptics(voices, p->count);
+    Result rc = Send(voices, p->count);
     LogVerbose("haptics: %s%s", p->name, R_FAILED(rc) ? " (failed)" : "");
 }
 
@@ -490,7 +532,7 @@ void HapticsPlayStep(u32 material, bool left, float amount) {
         *soft = *soft * 6 / 10;
         g_next_slot = g_next_slot + 1 >= SLOT_COUNT ? FIRST_ONESHOT_SLOT : g_next_slot + 1;
     }
-    mcPlayHaptics(voices, s->count);
+    Send(voices, s->count);
 }
 
 void HapticsSetLoop(HapticLoop loop, bool on) {
@@ -511,7 +553,7 @@ void HapticsSetLoop(HapticLoop loop, bool on) {
             voices[i].amp_left = voices[i].amp_right = 0;
         }
     }
-    if (R_SUCCEEDED(mcPlayHaptics(voices, l->count))) {
+    if (R_SUCCEEDED(Send(voices, l->count))) {
         g_loop_on[loop] = on;
     }
 }

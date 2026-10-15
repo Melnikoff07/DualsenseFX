@@ -31,7 +31,8 @@
         "bsd:s",
         "nifm:u",
         "bpc",
-        "bpc:c"
+        "bpc:c",
+        "hid"
     ],
     "service_host": [],
     "kernel_capabilities": [

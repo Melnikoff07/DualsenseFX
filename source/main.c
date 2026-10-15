@@ -337,6 +337,8 @@ static void LoadConfig(void) {
             g_haptic_settings.group[HapticGroup_Runes] = value;
         } else if (sscanf(p, "world_strength = %u", &value) == 1 && value <= 200) {
             g_haptic_settings.group[HapticGroup_World] = value;
+        } else if (sscanf(p, "output = %u", &value) == 1 && value <= 2) {
+            g_haptic_settings.output = value;
         } else if (sscanf(p, "triggers = %u", &value) == 1) {
             g_botw_settings.triggers = value != 0;
         } else if (sscanf(p, "low_health_quarters = %u", &value) == 1 && value <= 120) {
@@ -361,6 +363,7 @@ static void LoadConfig(void) {
     LogLine("config: verbose=%u", g_verbose);
     LogLine("config: attach_delay_s=%u, shield_hit_strength=%u, shield_hit_ms=%u, low_health_quarters=%u, %u watches",
             g_attach_delay_s, g_botw_settings.shield_hit_strength, g_botw_settings.shield_hit_ms, g_botw_settings.low_health_quarters, g_num_watches);
+    LogLine("config: output=%u", g_haptic_settings.output);
     LogLine("config: triggers=%u, haptics=%u, haptics_strength=%u, combat %u, body %u, runes %u, world %u, footsteps %u",
             g_botw_settings.triggers, g_haptic_settings.enabled, g_haptic_settings.strength,
             g_haptic_settings.group[HapticGroup_Combat], g_haptic_settings.group[HapticGroup_Body], g_haptic_settings.group[HapticGroup_Runes],
@@ -387,6 +390,7 @@ static void LoadConfig(void) {
 void ReloadConfig(void) {
     g_num_watches = 0;      // they are read again
     LoadConfig();
+    HapticsApplyOutput();
 }
 
 // The overlay (or anything else) writes the files, the module picks the change up within a second. The content is
@@ -507,6 +511,7 @@ static void CloseSession(GameSession *s) {
     SearchStop();
     DumpStop();
     HapticsSetAvailable(false);
+    HapticsSetMcOpen(false);
     if (s->mc_open) {
         mcExit();
         s->mc_open = false;
@@ -547,9 +552,10 @@ static void TryAttach(GameSession *s) {
     BotwInit(&s->botw, &s->meta);
     DumpStart(&s->meta);
 
+    HapticsSetAvailable(true);       // Joy-Con output works without MissionControl
     if (R_SUCCEEDED(rc = mcInitialize())) {
         s->mc_open = true;
-        HapticsSetAvailable(true);
+        HapticsSetMcOpen(true);
 
         char version[64];
         mcGetBuildVersionString(version, sizeof(version));
@@ -604,8 +610,15 @@ static void Update(GameSession *s) {
 
         // Send effects only when they change, the controller keeps the last ones
         TriggerEffects effects;
-        bool have_effects = s->mc_open && BotwComputeEffects(&s->botw, &effects);
-        have_effects |= s->mc_open && NetTriggerOverride(&effects);
+        // Triggers and lightbar exist on the DualSense only
+        bool dualsense = s->mc_open && g_haptic_settings.output == HapticOutput_DualSense;
+        bool have_effects = BotwComputeEffects(&s->botw, &effects);
+        if (!dualsense) {
+            effects.right = TriggerEffectOff();
+            effects.left = TriggerEffectOff();
+        }
+        bool net_override = NetTriggerOverride(&effects);
+        have_effects = s->mc_open && (have_effects || net_override);
         if (have_effects && (!s->sent_valid || memcmp(&effects, &s->sent, sizeof(effects)) != 0)) {
             Result rc = mcSetTriggerEffects(&effects);
             if (R_SUCCEEDED(rc)) {
@@ -620,7 +633,7 @@ static void Update(GameSession *s) {
         // Lightbar: heartbeat at low health, player colour otherwise
         u8 rgb[3];
         if (s->mc_open) {
-            bool want = BotwComputeLightbar(&s->botw, &rgb[0], &rgb[1], &rgb[2]);
+            bool want = BotwComputeLightbar(&s->botw, &rgb[0], &rgb[1], &rgb[2]) && dualsense;
             want |= NetLightbarOverride(&rgb[0], &rgb[1], &rgb[2]);
             if (want && (!s->lightbar_set || memcmp(rgb, s->lightbar, 3) != 0)) {
                 if (R_SUCCEEDED(mcSetLightbarColour(rgb[0], rgb[1], rgb[2]))) {
@@ -699,6 +712,7 @@ int main(int argc, char **argv) {
 
     StartLog();
     LoadConfig();
+    HapticsApplyOutput();
     LoadPatternsAndRules();
 
     GameSession session = {0};
