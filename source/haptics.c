@@ -2,10 +2,13 @@
 // an attack / hold / decay envelope) that MissionControl synthesises on the DualSense voice coils and mixes with the
 // game's own rumble. Left/right amplitudes put an effect in the hand that would feel it: the weapon hand is the right
 // one, the shield and the bow are held in the left.
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "haptics.h"
 #include "mc.h"
 
+void LogLine(const char *fmt, ...);
 void LogVerbose(const char *fmt, ...);
 
 HapticSettings g_haptic_settings = { .enabled = true, .strength = 100, .group = { 100, 100, 100, 100, 50 } };
@@ -27,7 +30,7 @@ typedef struct {
     VoiceDef voices[MC_HAPTIC_VOICES_MAX];
 } PatternDef;
 
-static const PatternDef Patterns[HapticPattern_Count] = {
+static const PatternDef DefaultPatterns[HapticPattern_Count] = {
     [HapticPattern_HitSword] = { "hit sword", HapticGroup_Combat, 2, {
         { 0,     120, 230, 220, 130,   0,   2,  12,  70 },  // crisp knock
         { NOISE,  90, 160, 180, 180,   0,   1,   8,  60 },  // body of the impact
@@ -168,7 +171,7 @@ typedef struct {
     VoiceDef voices[2];
 } LoopDef;
 
-static const LoopDef Loops[HapticLoop_Count] = {
+static const LoopDef DefaultLoops[HapticLoop_Count] = {
     [HapticLoop_BowTension] = { HapticGroup_Combat, 2, { 0, 1 }, {
         { NOISE | LOOP, 70, 45,  70,  70,   0,  900, 0, 0 },  // faint shaking of the drawn string
         { LOOP,         50, 30,  40,  55,   0, 1200, 0, 0 },  // slowly rising strain
@@ -191,7 +194,7 @@ typedef struct {
     VoiceDef voices[2];
 } StepDef;
 
-static const StepDef Steps[] = {
+static const StepDef DefaultSteps[] = {
     [1] = { 2, {{ 0,     60, 60,  70,  60, 0,  2, 10,  60 }, { NOISE, 30, 30, 150, 150, 0, 1,  5, 40 }}},  // soil: soft thud
     [2] = { 2, {{ 0,     70, 70, 140, 120, 0,  1,  5,  35 }, { NOISE, 40, 40, 600, 600, 0, 1,  2, 25 }}},  // stone: crisp click
     [3] = { 1, {{ NOISE, 55, 55, 250, 200, 0, 10, 20,  80 }}},                                            // sand: soft crunch
@@ -210,6 +213,209 @@ static const StepDef Steps[] = {
 static bool g_available;
 static u32 g_next_slot = FIRST_ONESHOT_SLOT;
 static bool g_loop_on[HapticLoop_Count];
+
+// ---- patterns.ini: the tables above are the defaults, the file can change any of them and add new ones ----
+
+#define STEP_MATERIALS 16
+
+typedef struct {
+    char name[32];
+    u8 group;
+    u32 count;
+    VoiceDef voices[MC_HAPTIC_VOICES_MAX];
+} Pattern;
+
+static Pattern g_patterns[HAPTIC_PATTERN_IDS];  // built-in ids first, then the ones patterns.ini adds
+static u32 g_num_patterns;
+static Pattern g_loops[HapticLoop_Count];       // slots stay as in DefaultLoops
+static Pattern g_steps[STEP_MATERIALS];
+
+static const char *LoopNames[HapticLoop_Count] = { "bow tension", "surf", "magnesis hum", "stamina refill" };
+static const char *StepNames[STEP_MATERIALS] = {
+    [1] = "soil", [2] = "stone", [3] = "sand", [4] = "metal", [6] = "grass", [7] = "wood", [8] = "water", [9] = "snow",
+    [10] = "ice", [14] = "cloth",
+};
+static const char *GroupNames[HapticGroup_Count] = { "combat", "body", "runes", "world", "footsteps" };
+
+static void SetPattern(Pattern *p, const char *name, u8 group, u32 count, const VoiceDef *voices) {
+    snprintf(p->name, sizeof(p->name), "%s", name);
+    p->group = group;
+    p->count = count;
+    memcpy(p->voices, voices, sizeof(VoiceDef) * count);
+}
+
+static void ResetPatterns(void) {
+    memset(g_patterns, 0, sizeof(g_patterns));
+    for (u32 i = 0; i < HapticPattern_Count; ++i) {
+        SetPattern(&g_patterns[i], DefaultPatterns[i].name, DefaultPatterns[i].group, DefaultPatterns[i].count, DefaultPatterns[i].voices);
+    }
+    g_num_patterns = HapticPattern_Count;
+    for (u32 i = 0; i < HapticLoop_Count; ++i) {
+        SetPattern(&g_loops[i], LoopNames[i], DefaultLoops[i].group, DefaultLoops[i].count, DefaultLoops[i].voices);
+    }
+    memset(g_steps, 0, sizeof(g_steps));
+    for (u32 i = 0; i < STEP_MATERIALS && i < sizeof(DefaultSteps) / sizeof(DefaultSteps[0]); ++i) {
+        if (DefaultSteps[i].count) {
+            char name[32];
+            snprintf(name, sizeof(name), "step %s", StepNames[i]);
+            SetPattern(&g_steps[i], name, HapticGroup_Footsteps, DefaultSteps[i].count, DefaultSteps[i].voices);
+        }
+    }
+}
+
+static void Trim(char *s) {
+    char *e = s + strlen(s);
+    while (e > s && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r' || e[-1] == '\n')) {
+        *--e = 0;
+    }
+    char *b = s;
+    while (*b == ' ' || *b == '\t') {
+        ++b;
+    }
+    memmove(s, b, strlen(b) + 1);
+}
+
+// Section [name]: a built-in pattern, a loop, "step <ground>", or a new pattern
+static Pattern *SectionFor(const char *name, bool *loop) {
+    *loop = false;
+    for (u32 i = 0; i < HapticLoop_Count; ++i) {
+        if (strcmp(name, LoopNames[i]) == 0) {
+            *loop = true;
+            return &g_loops[i];
+        }
+    }
+    if (strncmp(name, "step ", 5) == 0) {
+        for (u32 i = 0; i < STEP_MATERIALS; ++i) {
+            if (StepNames[i] && strcmp(name + 5, StepNames[i]) == 0) {
+                snprintf(g_steps[i].name, sizeof(g_steps[i].name), "%.31s", name);
+                g_steps[i].group = HapticGroup_Footsteps;
+                return &g_steps[i];
+            }
+        }
+        return NULL;
+    }
+    for (u32 i = 0; i < g_num_patterns; ++i) {
+        if (strcmp(name, g_patterns[i].name) == 0) {
+            return &g_patterns[i];
+        }
+    }
+    if (g_num_patterns >= HAPTIC_PATTERN_IDS) {
+        return NULL;
+    }
+    Pattern *p = &g_patterns[g_num_patterns++];
+    memset(p, 0, sizeof(*p));
+    snprintf(p->name, sizeof(p->name), "%.31s", name);
+    p->group = HapticGroup_World;
+    return p;
+}
+
+static void WriteVoices(FILE *f, const Pattern *p) {
+    for (u32 v = 0; v < p->count; ++v) {
+        const VoiceDef *d = &p->voices[v];
+        fprintf(f, "voice = %-5s %3u %3u %4u %4u %4u %4u %4u %4u\n", (d->flags & NOISE) ? "noise" : "sine",
+                d->left, d->right, d->freq_start, d->freq_end, d->delay, d->attack, d->hold, d->decay);
+    }
+}
+
+static void WriteDefaults(const char *path) {
+    FILE *f = fopen(path, "w");
+    if (f == NULL) {
+        return;
+    }
+    fputs("; Haptic patterns, applied within a second after saving (no reboot).\n"
+          "; [name] then group = combat | body | runes | world | footsteps, and up to 4 voices:\n"
+          ";   voice = sine|noise  left right  freq_start freq_end  delay attack hold decay\n"
+          "; amplitudes 0-255 per hand (the right hand holds the weapon, the left one the shield and the bow), Hz, ms.\n"
+          "; Loops (bow tension, surf, magnesis hum, stamina refill) hold while their state lasts; \"step <ground>\" are\n"
+          "; the footstep taps. New sections become new patterns that sounds.ini can use.\n", f);
+    for (u32 i = 0; i < HapticPattern_Count; ++i) {
+        fprintf(f, "\n[%s]\ngroup = %s\n", g_patterns[i].name, GroupNames[g_patterns[i].group]);
+        WriteVoices(f, &g_patterns[i]);
+    }
+    for (u32 i = 0; i < HapticLoop_Count; ++i) {
+        fprintf(f, "\n[%s]\ngroup = %s\n", g_loops[i].name, GroupNames[g_loops[i].group]);
+        WriteVoices(f, &g_loops[i]);
+    }
+    for (u32 i = 0; i < STEP_MATERIALS; ++i) {
+        if (g_steps[i].count) {
+            fprintf(f, "\n[%s]\n", g_steps[i].name);
+            WriteVoices(f, &g_steps[i]);
+        }
+    }
+    fclose(f);
+    LogLine("haptics: wrote default %s", path);
+}
+
+void HapticsLoadPatterns(const char *path) {
+    ResetPatterns();
+    FILE *f = fopen(path, "r");
+    if (f == NULL) {
+        WriteDefaults(path);
+        return;
+    }
+    char line[256];
+    Pattern *cur = NULL;
+    bool loop = false, voices_started = false;
+    u32 sections = 0, bad = 0;
+    while (fgets(line, sizeof(line), f)) {
+        char *c = strchr(line, ';');
+        if (c) {
+            *c = 0;
+        }
+        Trim(line);
+        if (line[0] == 0) {
+            continue;
+        }
+        if (line[0] == '[') {
+            char *e = strchr(line, ']');
+            if (e) {
+                *e = 0;
+            }
+            Trim(line + 1);
+            cur = SectionFor(line + 1, &loop);
+            voices_started = false;
+            sections += cur != NULL;
+            bad += cur == NULL;
+            continue;
+        }
+        if (cur == NULL) {
+            continue;
+        }
+        char type[8];
+        unsigned l, r, f0, f1, dl, at, ho, de;
+        char gname[16];
+        if (sscanf(line, "voice = %7s %u %u %u %u %u %u %u %u", type, &l, &r, &f0, &f1, &dl, &at, &ho, &de) == 9) {
+            if (!voices_started) {
+                cur->count = 0;
+                voices_started = true;
+            }
+            if (cur->count < MC_HAPTIC_VOICES_MAX && (loop ? cur->count < 2 : true)) {
+                cur->voices[cur->count++] = (VoiceDef){
+                    (u8)((strcmp(type, "noise") == 0 ? NOISE : 0) | (loop ? LOOP : 0)),
+                    (u8)(l > 255 ? 255 : l), (u8)(r > 255 ? 255 : r), (u16)f0, (u16)f1, (u16)dl, (u16)at, (u16)ho, (u16)de };
+            }
+        } else if (sscanf(line, "group = %15s", gname) == 1) {
+            for (u32 g = 0; g < HapticGroup_Count; ++g) {
+                if (strcmp(gname, GroupNames[g]) == 0) {
+                    cur->group = g;
+                }
+            }
+        } else {
+            ++bad;
+        }
+    }
+    fclose(f);
+    LogLine("haptics: %s: %u sections, %u patterns, %u lines not understood", path, sections, g_num_patterns, bad);
+}
+
+int HapticsFindPattern(const char *name) {
+    for (u32 i = 0; i < g_num_patterns; ++i) {
+        if (strcmp(name, g_patterns[i].name) == 0) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
 
 static u8 Scale(u32 amp, float factor) {
     float v = amp * factor * g_haptic_settings.strength / 100.0f;
@@ -239,16 +445,16 @@ void HapticsSetAvailable(bool available) {
     }
 }
 
-const char *HapticsPatternName(HapticPattern pattern) {
-    return pattern < HapticPattern_Count ? Patterns[pattern].name : "?";
+const char *HapticsPatternName(u32 pattern) {
+    return pattern < g_num_patterns ? g_patterns[pattern].name : "?";
 }
 
-void HapticsPlay(HapticPattern pattern, float amount) {
-    if (!g_available || !g_haptic_settings.enabled || pattern >= HapticPattern_Count) {
+void HapticsPlay(u32 pattern, float amount) {
+    if (!g_available || !g_haptic_settings.enabled || pattern >= g_num_patterns || g_patterns[pattern].count == 0) {
         return;
     }
 
-    const PatternDef *p = &Patterns[pattern];
+    const Pattern *p = &g_patterns[pattern];
     float factor = 1.0f;
     if (pattern == HapticPattern_Damage || pattern == HapticPattern_Landing) {
         factor = amount < 0.3f ? 0.3f : amount > 1.0f ? 1.0f : amount;
@@ -275,8 +481,8 @@ void HapticsPlayStep(u32 material, bool left, float amount) {
     if (!g_available || !g_haptic_settings.enabled || group == 0) {
         return;
     }
-    const StepDef *s = material < sizeof(Steps) / sizeof(Steps[0]) && Steps[material].count ? &Steps[material] : &Steps[1];
-    McHapticVoice voices[2];
+    const Pattern *s = material < STEP_MATERIALS && g_steps[material].count ? &g_steps[material] : &g_steps[1];
+    McHapticVoice voices[MC_HAPTIC_VOICES_MAX];
     for (u32 i = 0; i < s->count; ++i) {
         voices[i] = MakeVoice(&s->voices[i], g_next_slot, amount * group / 100.0f);
         // The other hand gets a softer copy, steps alternate between the hands
@@ -291,17 +497,16 @@ void HapticsSetLoop(HapticLoop loop, bool on) {
     if (!g_available || loop >= HapticLoop_Count) {
         return;
     }
-    const LoopDef *def = &Loops[loop];
-    on = on && g_haptic_settings.enabled && g_haptic_settings.group[def->group] > 0;
+    const Pattern *l = &g_loops[loop];
+    on = on && g_haptic_settings.enabled && g_haptic_settings.group[l->group] > 0;
     if (g_loop_on[loop] == on) {
         return;
     }
 
-    const LoopDef *l = &Loops[loop];
     McHapticVoice voices[MC_HAPTIC_VOICES_MAX];
     for (u32 i = 0; i < l->count; ++i) {
         // Off: amplitude 0 stops the slot
-        voices[i] = MakeVoice(&l->voices[i], l->slots[i], on ? g_haptic_settings.group[l->group] / 100.0f : 0.0f);
+        voices[i] = MakeVoice(&l->voices[i], DefaultLoops[loop].slots[i], on ? g_haptic_settings.group[l->group] / 100.0f : 0.0f);
         if (!on) {
             voices[i].amp_left = voices[i].amp_right = 0;
         }

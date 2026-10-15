@@ -17,6 +17,7 @@
 #include "dump.h"
 #include "net.h"
 #include "search.h"
+#include "sounds.h"
 
 #define BOTW_PROGRAM_ID 0x01007EF00011E000ULL
 
@@ -24,6 +25,8 @@
 #define LOG_PATH     LOG_DIR "/log.txt"
 #define LOG_OLD_PATH LOG_DIR "/log.old.txt"
 #define CONFIG_PATH  LOG_DIR "/config.ini"
+#define PATTERNS_PATH LOG_DIR "/patterns.ini"
+#define SOUNDS_PATH  LOG_DIR "/sounds.ini"
 
 #define POLL_INTERVAL_NS        (250 * 1000000ULL)
 #define ACTIVE_POLL_INTERVAL_NS (50 * 1000000ULL)  // 20 Hz while attached to the game
@@ -386,31 +389,51 @@ void ReloadConfig(void) {
     LoadConfig();
 }
 
-// The overlay (or anything else) writes config.ini, the module picks the change up within a second. The content is
+// The overlay (or anything else) writes the files, the module picks the change up within a second. The content is
 // compared (CRC32): FAT timestamps have 2 s steps and a changed value often keeps the file size.
+typedef struct {
+    const char *path;
+    u32 crc;
+    bool have;
+} WatchedFile;
+
+static bool FileChanged(WatchedFile *w) {
+    static char buf[32768];
+    FILE *f = fopen(w->path, "r");
+    if (f == NULL) {
+        return false;
+    }
+    size_t n = fread(buf, 1, sizeof(buf), f);
+    fclose(f);
+    u32 crc = crc32Calculate(buf, n);
+    bool changed = w->have && crc != w->crc;
+    w->crc = crc;
+    w->have = true;
+    return changed;
+}
+
+static void LoadPatternsAndRules(void) {
+    HapticsLoadPatterns(PATTERNS_PATH);
+    SoundsLoadRules(SOUNDS_PATH);    // after the patterns: rules refer to them by name
+}
+
 static void CheckConfigChanged(void) {
     static u64 next_tick;
-    static u32 last_crc;
-    static bool have;
-    static char buf[8192];
+    static WatchedFile config = { CONFIG_PATH, 0, false }, patterns = { PATTERNS_PATH, 0, false }, sounds = { SOUNDS_PATH, 0, false };
     u64 now = armGetSystemTick();
     if (now < next_tick) {
         return;
     }
     next_tick = now + armNsToTicks(1000000000ULL);
-    FILE *f = fopen(CONFIG_PATH, "r");
-    if (f == NULL) {
-        return;
-    }
-    size_t n = fread(buf, 1, sizeof(buf), f);
-    fclose(f);
-    u32 crc = crc32Calculate(buf, n);
-    if (have && crc != last_crc) {
+    if (FileChanged(&config)) {
         LogLine("config.ini changed, reloading");
         ReloadConfig();
     }
-    last_crc = crc;
-    have = true;
+    bool p = FileChanged(&patterns), r = FileChanged(&sounds);
+    if (p || r) {
+        LogLine("%s changed, reloading", p ? "patterns.ini" : "sounds.ini");
+        LoadPatternsAndRules();
+    }
 }
 
 // ---- game session ----
@@ -676,6 +699,7 @@ int main(int argc, char **argv) {
 
     StartLog();
     LoadConfig();
+    LoadPatternsAndRules();
 
     GameSession session = {0};
     u64 next_haptics_log = armGetSystemTick() + armNsToTicks(20000000000ULL);

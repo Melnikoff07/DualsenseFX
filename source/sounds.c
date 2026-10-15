@@ -11,6 +11,8 @@
 // Mt_Stone_Pl_Jump_00, Mt_Wood_Pl_LandWeak_00, Mt_Stone_Pl_ClimbStrong_HandL00, Water_In_SmallSlow01,
 // Water_Pl_SwimHand_MdlSizeFast02, Water_Pl_MoveShallowFast02, TboxFieldMetal_Open, Pl_Get02, SYS_ItemGet_Common,
 // Pl_FrontRoll00, WoodBox_Break00.
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "sounds.h"
 #include "haptics.h"
@@ -35,18 +37,53 @@ bool BotwInGame(const BotwState *state);
 
 typedef enum {
     Kind_Unknown = 0,       // looked up, nothing to play
-    Kind_Step,
-    Kind_Jump,
-    Kind_Land,
-    Kind_Climb,
-    Kind_WaterIn,
-    Kind_Swim,
-    Kind_Chest,
-    Kind_ItemGet,
-    Kind_Roll,
-    Kind_CrateBreak,
-    Kind_Count,
+    Kind_Step,              // footstep: ground, pace and foot from the name
+    Kind_Pattern,           // a pattern from patterns.ini
 } SoundKind;
+
+// sounds.ini: "name mask = action [strength %]", first matching line wins
+typedef struct {
+    char mask[64];
+    u8 kind;
+    s16 pattern;
+    u8 amount;
+    u8 material;            // steps: forced ground, 0 = from the name
+} Rule;
+
+#define MAX_RULES 160
+
+static Rule g_rules[MAX_RULES];
+static u32 g_num_rules;
+
+static const char *DefaultRules =
+    "; Which game sounds play which haptic pattern. Applied within a second after saving (no reboot).\n"
+    "; mask = action [strength %]   '*' matches anything, the first matching line wins.\n"
+    "; action: a pattern name from patterns.ini, \"step\" (footstep: ground, pace, heel / toe and foot from the name),\n"
+    ";         \"step <ground>\" (footstep on that ground), or \"ignore\".\n"
+    "; Sound names can be seen with the sound log tool (tools/sndlog.py) while playing.\n"
+    "\n"
+    "; Footsteps: Mt_<ground>_Pl_Move<Slow|Normal|Fast|Naked>_<Heel|Toe><L|R>NN\n"
+    "Mt_*_Pl_Move* = step\n"
+    "Water_Pl_MoveShallow* = step water\n"
+    "\n"
+    "; Body\n"
+    "Mt_*_Pl_Land*Weak* = land\n"
+    "Mt_*_Pl_Land* = landing\n"
+    "Mt_*_Pl_Jump* = jump\n"
+    "Mt_*_Pl_Climb* = climb grip\n"
+    "Pl_FrontRoll* = roll\n"
+    "\n"
+    "; Water\n"
+    "Water_In_Small* = water splash 60\n"
+    "Water_In_* = water splash\n"
+    "Water_Pl_SwimHand* = swim stroke\n"
+    "\n"
+    "; World\n"
+    "Tbox*Open* = chest open\n"
+    "Pl_Get* = item get\n"
+    "SYS_ItemGet* = item get\n"
+    "WoodBox_Break* = crate break\n";
+
 
 typedef struct {
     u64 fwav;               // 0 = empty
@@ -55,6 +92,7 @@ typedef struct {
     u8 material;            // steps: BotW ground material index
     u8 amount;              // percent
     u8 left;
+    s16 pattern;
 } CacheEntry;
 
 static u64 g_main_base;
@@ -63,7 +101,7 @@ static u64 g_check_tick;
 static bool g_serials_valid;
 static u32 g_serials[WAVE_SOUND_COUNT];
 static CacheEntry g_cache[CACHE_SIZE];
-static u64 g_last_kind_tick[Kind_Count];
+static u64 g_last_play_tick[HAPTIC_PATTERN_IDS];
 static u8 g_pool_buf[WAVE_SOUND_COUNT * WAVE_SOUND_SIZE];
 static u8 g_chunk[BARS_CHUNK + 4];
 static u32 g_resolved, g_unnamed;
@@ -124,59 +162,166 @@ static u8 PaceAmount(const char *p) {
     return 55;
 }
 
+static bool Match(const char *mask, const char *name) {
+    // '*' matches any run of characters
+    if (*mask == 0) {
+        return *name == 0;
+    }
+    if (*mask == '*') {
+        for (const char *n = name;; ++n) {
+            if (Match(mask + 1, n)) {
+                return true;
+            }
+            if (*n == 0) {
+                return false;
+            }
+        }
+    }
+    return *name == *mask && Match(mask + 1, name + 1);
+}
+
+static u8 MaterialByWord(const char *w) {
+    static const char *Words[] = { [1] = "soil", [2] = "stone", [3] = "sand", [4] = "metal", [6] = "grass", [7] = "wood",
+                                   [8] = "water", [9] = "snow", [10] = "ice", [14] = "cloth" };
+    for (u32 i = 0; i < sizeof(Words) / sizeof(Words[0]); ++i) {
+        if (Words[i] && strcmp(w, Words[i]) == 0) {
+            return i;
+        }
+    }
+    return 0;
+}
+
+static void Trim(char *s) {
+    char *e = s + strlen(s);
+    while (e > s && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r' || e[-1] == '\n')) {
+        *--e = 0;
+    }
+    char *b = s;
+    while (*b == ' ' || *b == '\t') {
+        ++b;
+    }
+    memmove(s, b, strlen(b) + 1);
+}
+
+static void ParseRuleLine(char *line, u32 *bad) {
+    char *c = strchr(line, ';');
+    if (c) {
+        *c = 0;
+    }
+    char *eq = strchr(line, '=');
+    if (eq == NULL) {
+        Trim(line);
+        *bad += line[0] != 0;
+        return;
+    }
+    *eq = 0;
+    char *mask = line, *action = eq + 1;
+    Trim(mask);
+    Trim(action);
+    if (mask[0] == 0 || action[0] == 0 || g_num_rules >= MAX_RULES) {
+        ++*bad;
+        return;
+    }
+    Rule r = { .amount = 100, .pattern = -1 };
+    snprintf(r.mask, sizeof(r.mask), "%s", mask);
+    // Optional strength at the end: "water splash 60"
+    char *sp = strrchr(action, ' ');
+    if (sp && sp[1] >= '0' && sp[1] <= '9') {
+        int v = atoi(sp + 1);
+        r.amount = v < 0 ? 0 : v > 200 ? 200 : v;
+        *sp = 0;
+        Trim(action);
+    }
+    if (strcmp(action, "ignore") == 0) {
+        r.kind = Kind_Unknown;
+    } else if (strncmp(action, "step", 4) == 0 && (action[4] == 0 || action[4] == ' ')) {
+        r.kind = Kind_Step;
+        if (action[4] == ' ') {
+            r.material = MaterialByWord(action + 5);
+        }
+    } else {
+        r.kind = Kind_Pattern;
+        r.pattern = HapticsFindPattern(action);
+        if (r.pattern < 0) {
+            LogLine("sounds: rule \"%s\": no pattern \"%s\"", mask, action);
+            ++*bad;
+            return;
+        }
+    }
+    g_rules[g_num_rules++] = r;
+}
+
+void SoundsLoadRules(const char *path) {
+    g_num_rules = 0;
+    u32 bad = 0;
+    FILE *f = fopen(path, "r");
+    if (f == NULL) {
+        FILE *out = fopen(path, "w");
+        if (out) {
+            fputs(DefaultRules, out);
+            fclose(out);
+            LogLine("sounds: wrote default %s", path);
+        }
+        char buf[256];
+        for (const char *p = DefaultRules; *p;) {
+            const char *e = strchr(p, '\n');
+            size_t n = e ? (size_t)(e - p) : strlen(p);
+            snprintf(buf, sizeof(buf), "%.*s", (int)n, p);
+            ParseRuleLine(buf, &bad);
+            p += n + (e != NULL);
+        }
+    } else {
+        char line[256];
+        while (fgets(line, sizeof(line), f)) {
+            ParseRuleLine(line, &bad);
+        }
+        fclose(f);
+    }
+    LogLine("sounds: %u rules, %u lines not understood", g_num_rules, bad);
+    SoundsReset();
+}
+
 static void Classify(const char *name, CacheEntry *e) {
     e->kind = Kind_Unknown;
-    e->amount = 100;
-    e->left = 0;
-    if (StartsWith(name, "Mt_")) {
-        const char *m = name + 3;
-        const char *pl = strstr(m, "_Pl_");
-        if (pl == NULL) {
-            return;     // a material sound of something else than the player
+    for (u32 i = 0; i < g_num_rules; ++i) {
+        const Rule *r = &g_rules[i];
+        if (!Match(r->mask, name)) {
+            continue;
         }
-        e->material = MaterialFromName(m, pl - m);
-        const char *what = pl + 4;
-        if (StartsWith(what, "Move")) {
-            const char *pace = what + 4;
-            const char *part = strchr(pace, '_');
-            e->kind = Kind_Step;
-            e->amount = PaceAmount(pace);
-            if (part != NULL) {
-                ++part;
-                if (StartsWith(part, "Toe")) {
-                    e->amount = e->amount * 4 / 10;   // the toe follows the heel, a light second touch
-                } else if (StartsWith(part, "HeelAccent")) {
-                    e->amount = e->amount * 8 / 10;
-                }
-                const char *foot = part + (StartsWith(part, "Heel") ? 4 : StartsWith(part, "Toe") ? 3 : 0);
-                e->left = *foot == 'L';
+        e->kind = r->kind;
+        e->pattern = r->pattern;
+        e->amount = r->amount;
+        if (r->kind != Kind_Step) {
+            return;
+        }
+        // Footstep: ground from "Mt_<ground>_", pace word after "Move" / "MoveShallow", heel or toe, foot
+        e->material = r->material;
+        const char *move = strstr(name, "Move");
+        const char *pace = move ? move + 4 : name;
+        if (StartsWith(pace, "Shallow")) {
+            pace += 7;
+        }
+        if (e->material == 0 && StartsWith(name, "Mt_")) {
+            const char *pl = strstr(name + 3, "_Pl_");
+            e->material = MaterialFromName(name + 3, pl ? (size_t)(pl - name - 3) : strlen(name + 3));
+        }
+        if (e->material == 0) {
+            e->material = 1;
+        }
+        u32 amount = PaceAmount(pace) * r->amount / 100;
+        const char *part = strchr(pace, '_');
+        if (part != NULL) {
+            ++part;
+            if (StartsWith(part, "Toe")) {
+                amount = amount * 4 / 10;   // the toe follows the heel, a light second touch
+            } else if (StartsWith(part, "HeelAccent")) {
+                amount = amount * 8 / 10;
             }
-        } else if (StartsWith(what, "Jump")) {
-            e->kind = Kind_Jump;
-        } else if (StartsWith(what, "Land")) {
-            e->kind = Kind_Land;
-            e->amount = strstr(what, "Weak") != NULL ? 0 : 100;   // 0 = light landing, else a real fall
-        } else if (StartsWith(what, "Climb")) {
-            e->kind = Kind_Climb;
-            e->left = strstr(what, "L0") != NULL;
+            const char *foot = part + (StartsWith(part, "Heel") ? 4 : StartsWith(part, "Toe") ? 3 : 0);
+            e->left = *foot == 'L';
         }
-    } else if (StartsWith(name, "Water_Pl_MoveShallow")) {
-        e->kind = Kind_Step;
-        e->material = 8;
-        e->amount = PaceAmount(name + 20);
-    } else if (StartsWith(name, "Water_Pl_SwimHand")) {
-        e->kind = Kind_Swim;
-    } else if (StartsWith(name, "Water_In_")) {
-        e->kind = Kind_WaterIn;
-        e->amount = StartsWith(name + 9, "Small") ? 60 : 100;
-    } else if (StartsWith(name, "Tbox") && strstr(name, "Open") != NULL) {
-        e->kind = Kind_Chest;
-    } else if (StartsWith(name, "Pl_Get") || StartsWith(name, "SYS_ItemGet")) {
-        e->kind = Kind_ItemGet;
-    } else if (StartsWith(name, "Pl_FrontRoll")) {
-        e->kind = Kind_Roll;
-    } else if (StartsWith(name, "WoodBox_Break")) {
-        e->kind = Kind_CrateBreak;
+        e->amount = amount > 200 ? 200 : amount;
+        return;
     }
 }
 
@@ -263,25 +408,16 @@ static void Play(BotwState *state, const CacheEntry *e) {
     if (e->kind == Kind_Unknown || !BotwInGame(state) || state->menu_open) {
         return;
     }
-    u64 now = armGetSystemTick();
     if (e->kind == Kind_Step) {
         HapticsPlayStep(e->material, e->left, e->amount / 100.0f);
         return;
     }
-    if (now - g_last_kind_tick[e->kind] < armNsToTicks(REPEAT_NS)) {
+    u64 now = armGetSystemTick();
+    if (e->pattern < 0 || now - g_last_play_tick[e->pattern] < armNsToTicks(REPEAT_NS)) {
         return;
     }
-    g_last_kind_tick[e->kind] = now;
-    if (e->kind == Kind_Land && e->amount == 100) {
-        HapticsPlay(HapticPattern_Landing, 1.0f);
-        return;
-    }
-    static const HapticPattern Patterns[Kind_Count] = {
-        [Kind_Jump] = HapticPattern_Jump, [Kind_Land] = HapticPattern_LandSoft, [Kind_Climb] = HapticPattern_ClimbGrip,
-        [Kind_WaterIn] = HapticPattern_WaterSplash, [Kind_Swim] = HapticPattern_SwimStroke, [Kind_Chest] = HapticPattern_ChestOpen,
-        [Kind_ItemGet] = HapticPattern_ItemGet, [Kind_Roll] = HapticPattern_Roll, [Kind_CrateBreak] = HapticPattern_CrateBreak,
-    };
-    HapticsPlay(Patterns[e->kind], e->kind == Kind_Land ? 1.0f : e->amount / 100.0f);
+    g_last_play_tick[e->pattern] = now;
+    HapticsPlay(e->pattern, e->amount / 100.0f);
 }
 
 void SoundsPoll(BotwState *state) {
@@ -325,7 +461,7 @@ void SoundsPoll(BotwState *state) {
                 Classify(name, e);
                 ++g_resolved;
                 if (e->kind != Kind_Unknown) {
-                    LogVerbose("sounds: %s -> kind %u material %u amount %u", name, e->kind, e->material, e->amount);
+                    LogVerbose("sounds: %s -> %s, material %u, %u%%", name, e->kind == Kind_Step ? "step" : HapticsPatternName(e->pattern), e->material, e->amount);
                 }
             } else {
                 ++g_unnamed;

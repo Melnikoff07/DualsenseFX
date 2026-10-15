@@ -41,6 +41,9 @@ typedef enum {
     HapticPattern_Count,
 } HapticPattern;
 
+// Pattern ids: the HapticPattern values, then the patterns patterns.ini adds
+#define HAPTIC_PATTERN_IDS (HapticPattern_Count + 32)
+
 typedef enum {
     HapticLoop_BowTension,
     HapticLoop_Surf,
@@ -71,7 +74,7 @@ extern HapticSettings g_haptic_settings;
 void HapticsSetAvailable(bool available);
 
 // amount: 0.0-1.0 for patterns that scale (damage, landing), ignored by the others
-void HapticsPlay(HapticPattern pattern, float amount);
+void HapticsPlay(u32 pattern, float amount);
 
 // One footstep on the given ground material (BotW material index), in the hand of the foot that stepped;
 // amount 0.0-1.0 (pace, heel or toe)
@@ -81,4 +84,8 @@ void HapticsPlayStep(u32 material, bool left, float amount);
 void HapticsSetLoop(HapticLoop loop, bool on);
 void HapticsStopAll(void);
 
-const char *HapticsPatternName(HapticPattern pattern);
+const char *HapticsPatternName(u32 pattern);
+
+// patterns.ini: defaults first, then what the file changes or adds; writes the defaults when the file is missing
+void HapticsLoadPatterns(const char *path);
+int HapticsFindPattern(const char *name);       // -1 if there is no such pattern
